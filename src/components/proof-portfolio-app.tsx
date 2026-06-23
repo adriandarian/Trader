@@ -2,29 +2,29 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
-  Activity,
+  AlertTriangle,
+  ArrowLeftRight,
   BarChart3,
   BookOpen,
   BriefcaseBusiness,
-  CalendarClock,
-  CircleDollarSign,
-  Clock3,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  ExternalLink,
+  FileText,
+  Globe2,
+  Info,
   Landmark,
-  LineChart,
+  LayoutGrid,
   Loader2,
   Search,
   Settings,
   ShieldCheck,
-  SlidersHorizontal,
 } from "lucide-react";
 
 import { currency, percent, signedCurrency, summarizeProofPortfolio } from "@/domain/accounting";
 import type { ProofPortfolioSummary } from "@/domain/types";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 
 type QuoteResponse = {
   quote?: {
@@ -44,12 +44,20 @@ type QuoteResponse = {
       feed: string;
     };
   };
-  clock?: {
-    isOpen: boolean | null;
-    timestamp: string;
-    nextOpen: string | null;
-    nextClose: string | null;
-  } | null;
+  clock?: MarketClock | null;
+  error?: string;
+  code?: string;
+};
+
+type MarketClock = {
+  isOpen: boolean | null;
+  timestamp: string;
+  nextOpen: string | null;
+  nextClose: string | null;
+};
+
+type ClockResponse = {
+  clock?: MarketClock;
   error?: string;
   code?: string;
 };
@@ -63,10 +71,10 @@ type SearchResult = {
 };
 
 const navItems = [
-  ["Overview", Activity],
-  ["Markets", LineChart],
+  ["Overview", LayoutGrid],
+  ["Markets", Globe2],
   ["Portfolio", BriefcaseBusiness],
-  ["Trade", CircleDollarSign],
+  ["Trade", ArrowLeftRight],
   ["Journal", BookOpen],
   ["Deposits & Cash", Landmark],
   ["Performance", BarChart3],
@@ -74,20 +82,23 @@ const navItems = [
 ] as const;
 
 const rangeOptions = ["1W", "1M", "3M", "YTD", "All"];
+const marketRangeOptions = ["1D", "5D", "1M", "3M", "1Y", "5Y", "All"];
 
 export function ProofPortfolioApp() {
   const [activeSection, setActiveSection] = useState("Overview");
-  const [symbolQuery, setSymbolQuery] = useState("SPY");
+  const [symbolQuery, setSymbolQuery] = useState("");
   const [quoteState, setQuoteState] = useState<QuoteResponse>({});
+  const [clockState, setClockState] = useState<ClockResponse>({});
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [isLoadingQuote, setIsLoadingQuote] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
-  const [range, setRange] = useState("1M");
+  const [range, setRange] = useState("All");
+  const [marketRange, setMarketRange] = useState("1D");
   const [depositDraft, setDepositDraft] = useState({
     amount: "",
     date: new Date().toISOString().slice(0, 10),
-    category: "paycheck",
-    sourceLabel: "",
+    category: "",
+    sourceLabel: "Manual Deposit",
     notes: "",
   });
 
@@ -101,28 +112,32 @@ export function ProofPortfolioApp() {
     [],
   );
 
+  const clock = quoteState.clock ?? clockState.clock ?? null;
+  const providerConnected = Boolean(clockState.clock || quoteState.quote);
+  const lastUpdated = quoteState.quote?.source.asOf ?? clock?.timestamp ?? null;
+
   useEffect(() => {
     const controller = new AbortController();
 
-    async function loadInitialQuote() {
-      setIsLoadingQuote(true);
-
+    async function loadClock() {
       try {
-        const response = await fetch("/api/market-data/quote?symbol=SPY", { signal: controller.signal });
-        const payload = (await response.json()) as QuoteResponse;
-        setQuoteState(payload);
+        const response = await fetch("/api/market-data/clock", { signal: controller.signal });
+        const payload = (await response.json()) as ClockResponse;
+
+        if (!response.ok) {
+          setClockState({ error: payload.error ?? "Market clock request failed.", code: payload.code });
+          return;
+        }
+
+        setClockState(payload);
       } catch {
         if (!controller.signal.aborted) {
-          setQuoteState({ error: "Unable to reach the market-data route.", code: "NETWORK_ERROR" });
-        }
-      } finally {
-        if (!controller.signal.aborted) {
-          setIsLoadingQuote(false);
+          setClockState({ error: "Unable to reach the market-data route.", code: "NETWORK_ERROR" });
         }
       }
     }
 
-    void loadInitialQuote();
+    void loadClock();
 
     return () => controller.abort();
   }, []);
@@ -140,8 +155,15 @@ export function ProofPortfolioApp() {
     try {
       const response = await fetch(`/api/market-data/quote?symbol=${encodeURIComponent(normalized)}`);
       const payload = (await response.json()) as QuoteResponse;
+
+      if (!response.ok) {
+        setQuoteState({ error: payload.error ?? "Market data request failed.", code: payload.code });
+        return;
+      }
+
       setQuoteState(payload);
       setSymbolQuery(normalized);
+      setSearchResults([]);
     } catch {
       setQuoteState({ error: "Unable to reach the market-data route.", code: "NETWORK_ERROR" });
     } finally {
@@ -171,157 +193,174 @@ export function ProofPortfolioApp() {
   }
 
   return (
-    <main className="min-h-screen overflow-x-hidden bg-[#080b0f] text-[#e8edf2]">
-      <div className="grid min-h-screen lg:grid-cols-[232px_1fr]">
-        <aside className="hidden border-r border-white/8 bg-[#0b0f14] lg:block">
-          <div className="flex h-16 items-center gap-3 border-b border-white/8 px-5">
-            <div className="flex size-9 items-center justify-center rounded-md border border-emerald-400/30 bg-emerald-400/10 text-emerald-300">
-              <ShieldCheck className="size-4" />
-            </div>
-            <div>
-              <p className="text-sm font-semibold tracking-tight">Proof Portfolio</p>
-              <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Paper terminal</p>
-            </div>
-          </div>
-          <nav className="space-y-1 px-3 py-4">
-            {navItems.map(([label, Icon]) => (
-              <button
-                key={label}
-                className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition ${
-                  activeSection === label
-                    ? "bg-slate-800/80 text-white"
-                    : "text-slate-400 hover:bg-slate-900 hover:text-slate-100"
-                }`}
-                onClick={() => setActiveSection(label)}
-              >
-                <Icon className="size-4" />
-                {label}
-              </button>
-            ))}
-          </nav>
-        </aside>
+    <main className="h-dvh overflow-hidden bg-[#070b10] text-[#e7edf4]">
+      <div className="grid h-dvh grid-rows-[52px_minmax(0,1fr)_40px]">
+        <TopHeader
+          symbolQuery={symbolQuery}
+          setSymbolQuery={setSymbolQuery}
+          clock={clock}
+          providerConnected={providerConnected}
+          providerError={clockState.error}
+          lastUpdated={lastUpdated}
+          isLoadingQuote={isLoadingQuote}
+          onQuote={() => loadQuote()}
+          onSearch={searchSymbols}
+        />
 
-        <section className="min-w-0">
-          <TopCommandBar
+        <div className="grid min-h-0 grid-cols-1 lg:grid-cols-[188px_minmax(0,1fr)] xl:grid-cols-[188px_minmax(0,1fr)_360px]">
+          <LeftSidebar activeSection={activeSection} setActiveSection={setActiveSection} summary={summary} />
+
+          <section className="min-h-0 min-w-0 overflow-auto border-r border-[#67809640] px-4 py-3 terminal-scroll xl:overflow-hidden">
+            <Overview summary={summary} range={range} setRange={setRange} />
+          </section>
+
+          <RightRail
             symbolQuery={symbolQuery}
             setSymbolQuery={setSymbolQuery}
             quoteState={quoteState}
+            searchResults={searchResults}
+            clock={clock}
+            marketRange={marketRange}
+            setMarketRange={setMarketRange}
             isLoadingQuote={isLoadingQuote}
-            onQuote={() => loadQuote()}
+            isSearching={isSearching}
+            onQuote={loadQuote}
             onSearch={searchSymbols}
+            depositDraft={depositDraft}
+            setDepositDraft={setDepositDraft}
           />
+        </div>
 
-          <div className="grid min-w-0 gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-            <div className="min-w-0 space-y-4">
-              <MobileNav activeSection={activeSection} setActiveSection={setActiveSection} />
-              <Overview summary={summary} range={range} setRange={setRange} />
-              <div className="grid gap-4 xl:grid-cols-[1.3fr_0.9fr]">
-                <RecentTrades />
-                <CashLedgerPreview />
-              </div>
-            </div>
-
-            <aside className="min-w-0 space-y-4">
-              <MarketPanel
-                symbolQuery={symbolQuery}
-                setSymbolQuery={setSymbolQuery}
-                quoteState={quoteState}
-                searchResults={searchResults}
-                isLoadingQuote={isLoadingQuote}
-                isSearching={isSearching}
-                onQuote={loadQuote}
-                onSearch={searchSymbols}
-              />
-              <DepositPanel depositDraft={depositDraft} setDepositDraft={setDepositDraft} />
-              <ProofScorecard />
-            </aside>
-          </div>
-        </section>
+        <TerminalFooter />
       </div>
     </main>
   );
 }
 
-function TopCommandBar({
+function TopHeader({
   symbolQuery,
   setSymbolQuery,
-  quoteState,
+  clock,
+  providerConnected,
+  providerError,
+  lastUpdated,
   isLoadingQuote,
   onQuote,
   onSearch,
 }: {
   symbolQuery: string;
   setSymbolQuery: (value: string) => void;
-  quoteState: QuoteResponse;
+  clock: MarketClock | null;
+  providerConnected: boolean;
+  providerError?: string;
+  lastUpdated: string | null;
   isLoadingQuote: boolean;
   onQuote: () => void;
   onSearch: () => void;
 }) {
   return (
-    <header className="sticky top-0 z-10 flex min-h-16 flex-col gap-3 border-b border-white/8 bg-[#0a0e13]/95 px-4 py-3 backdrop-blur md:flex-row md:items-center md:justify-between">
-      <div className="flex min-w-0 flex-1 items-center gap-2">
-        <div className="flex min-w-0 flex-1 items-center rounded-md border border-white/10 bg-[#111820] px-3">
-          <Search className="size-4 text-slate-500" />
-          <input
-            className="h-9 min-w-0 flex-1 bg-transparent px-3 text-sm text-slate-100 outline-none placeholder:text-slate-600"
-            value={symbolQuery}
-            placeholder="Search symbol"
-            onChange={(event) => setSymbolQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                onQuote();
-                onSearch();
-              }
-            }}
-          />
-          <Button size="sm" variant="secondary" onClick={onQuote} disabled={isLoadingQuote}>
-            {isLoadingQuote ? <Loader2 className="size-3.5 animate-spin" /> : "Quote"}
-          </Button>
-        </div>
+    <header className="grid min-w-0 grid-cols-[188px_minmax(320px,420px)_minmax(0,1fr)] items-center border-b border-[#67809640] bg-[#070b10]">
+      <div className="flex items-center gap-3 px-4">
+        <LogoMark />
+        <span className="truncate text-[16px] font-semibold tracking-[-0.01em] text-white">Proof Portfolio</span>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
-        <StatusPill
-          label={
-            quoteState.clock?.isOpen === true
-              ? "Market open"
-              : quoteState.clock?.isOpen === false
-                ? "Market closed"
-                : "Market status unknown"
-          }
-          tone={quoteState.clock?.isOpen ? "positive" : "neutral"}
+      <div className="flex min-w-0 items-center rounded-[4px] border border-[#6780964d] bg-[#0d141d] px-2">
+        <Search className="size-4 shrink-0 text-[#8997a8]" />
+        <input
+          className="h-[34px] min-w-0 flex-1 bg-transparent px-3 text-[12px] text-[#e7edf4] outline-none placeholder:text-[#7a8796]"
+          value={symbolQuery}
+          placeholder="Search symbols (e.g., AAPL, SPY, TSLA)"
+          onChange={(event) => setSymbolQuery(event.target.value.toUpperCase())}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              onQuote();
+              onSearch();
+            }
+          }}
         />
-        <StatusPill label={quoteState.quote?.source.label ?? "Alpaca Basic: IEX real-time"} tone="neutral" />
-        <span className="font-mono">
-          Last updated {formatTimestamp(quoteState.quote?.source.asOf ?? quoteState.clock?.timestamp ?? null)}
+        <kbd className="rounded-[3px] border border-[#67809640] bg-[#101822] px-1.5 py-0.5 font-mono text-[11px] text-[#8794a4]">/</kbd>
+      </div>
+
+      <div className="flex min-w-0 items-center justify-end gap-4 px-4 text-[12px] text-[#c6d0dc]">
+        <StatusBlock
+          dotTone={clock?.isOpen ? "positive" : "negative"}
+          label={marketStatusLabel(clock, providerError)}
+          detail={marketStatusDetail(clock, providerError)}
+        />
+        <HeaderDivider />
+        <StatusBlock
+          dotTone={providerConnected ? "positive" : "warning"}
+          label="Data: Alpaca"
+          detail={providerConnected ? "Connected" : providerError ? "Degraded" : "Checking"}
+        />
+        <HeaderDivider />
+        <span className="whitespace-nowrap font-mono text-[12px] text-[#c6d0dc]">
+          Last updated: {lastUpdated ? formatTimestamp(lastUpdated, "time") : isLoadingQuote ? "Loading" : "Pending"}
         </span>
-        <div className="rounded-md border border-white/10 px-2 py-1 text-slate-300">Personal</div>
+        <HeaderDivider />
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex size-8 items-center justify-center rounded-full bg-[#1b2531] font-mono text-[12px] text-white">PP</div>
+          <div className="hidden min-w-0 xl:block">
+            <p className="truncate text-[12px] font-semibold text-white">Proof Portfolio</p>
+            <p className="text-[12px] text-[#c6d0dc]">Individual</p>
+          </div>
+          <ChevronDown className="size-4 text-[#c6d0dc]" />
+        </div>
       </div>
     </header>
   );
 }
 
-function MobileNav({
+function LeftSidebar({
   activeSection,
   setActiveSection,
+  summary,
 }: {
   activeSection: string;
   setActiveSection: (value: string) => void;
+  summary: ProofPortfolioSummary;
 }) {
   return (
-    <div className="flex gap-2 overflow-x-auto lg:hidden">
-      {navItems.map(([label]) => (
-        <button
-          key={label}
-          className={`shrink-0 rounded-md border px-3 py-2 text-xs ${
-            activeSection === label ? "border-slate-500 bg-slate-800 text-white" : "border-white/10 text-slate-400"
-          }`}
-          onClick={() => setActiveSection(label)}
-        >
-          {label}
+    <aside className="hidden min-h-0 border-r border-[#67809640] bg-[#070b10] lg:grid lg:grid-rows-[minmax(0,1fr)_244px]">
+      <nav className="space-y-2 px-1 py-2">
+        {navItems.map(([label, Icon]) => (
+          <button
+            key={label}
+            className={`flex h-[44px] w-full items-center gap-3 rounded-[4px] px-4 text-left text-[13px] font-medium transition ${
+              activeSection === label
+                ? "bg-[#162130] text-white"
+                : "text-[#c2ccd8] hover:bg-[#0d141d] hover:text-white"
+            }`}
+            onClick={() => setActiveSection(label)}
+          >
+            <Icon className="size-[18px] shrink-0" />
+            <span className="truncate">{label}</span>
+          </button>
+        ))}
+      </nav>
+
+      <div className="space-y-2 border-t border-[#67809633] p-1 pb-3">
+        <div className="rounded-[4px] border border-[#67809640] bg-[#090e14] p-3 text-[12px]">
+          <SidebarValue label="Buying Power" value={currency(summary.cashAvailable)} />
+          <SidebarValue label="Day Trades (0,0,0,0)" value="-" />
+          <SidebarValue label="Cash Balance" value={currency(summary.cashAvailable)} />
+        </div>
+
+        <div className="rounded-[4px] border border-[#67809640] bg-[#090e14] p-3">
+          <div className="flex items-center gap-2 text-[12px] font-semibold text-white">
+            <span className="size-2 rounded-full bg-[#22d487]" />
+            Paper Trading
+          </div>
+          <p className="mt-1 pl-4 text-[12px] text-[#9aa7b7]">Simulation Mode</p>
+        </div>
+
+        <button className="flex h-10 w-full items-center gap-3 rounded-[4px] px-4 text-left text-[12px] text-[#c2ccd8] hover:bg-[#0d141d]">
+          <ChevronLeft className="size-4" />
+          Collapse
         </button>
-      ))}
-    </div>
+      </div>
+    </aside>
   );
 }
 
@@ -335,75 +374,124 @@ function Overview({
   setRange: (value: string) => void;
 }) {
   const metrics = [
-    ["Total portfolio value", currency(summary.totalPortfolioValue), "neutral"],
-    ["Cash available", currency(summary.cashAvailable), "neutral"],
-    ["Invested market value", currency(summary.investedMarketValue), "neutral"],
-    ["Today's P/L", signedCurrency(summary.todayPnl), valueTone(summary.todayPnl)],
-    ["Total realized P/L", signedCurrency(summary.totalRealizedPnl), valueTone(summary.totalRealizedPnl)],
-    ["Total unrealized P/L", signedCurrency(summary.totalUnrealizedPnl), valueTone(summary.totalUnrealizedPnl)],
-    ["Net contributions", currency(summary.netContributions), "neutral"],
-    ["Trading return excl. deposits", signedCurrency(summary.tradingReturnExcludingDeposits), valueTone(summary.tradingReturnExcludingDeposits)],
-    ["Time-weighted return", percent(summary.timeWeightedReturn), valueTone(summary.timeWeightedReturn)],
-    ["Benchmark vs SPY", percent(summary.benchmarkReturn), valueTone(summary.benchmarkReturn)],
-  ] as const;
+    { label: "Total Portfolio Value", value: currency(summary.totalPortfolioValue), support: "$0.00 (0.00%)", tone: "neutral" },
+    { label: "Cash Available", value: currency(summary.cashAvailable), tone: "neutral" },
+    { label: "Invested Market Value", value: currency(summary.investedMarketValue), tone: "neutral" },
+    { label: "Today's P/L", value: zeroCurrency(summary.todayPnl), support: percent(summary.todayPnl), tone: valueTone(summary.todayPnl) },
+    {
+      label: "Total Realized P/L",
+      value: zeroCurrency(summary.totalRealizedPnl),
+      support: percent(summary.totalRealizedPnl),
+      tone: valueTone(summary.totalRealizedPnl),
+    },
+    {
+      label: "Total Unrealized P/L",
+      value: zeroCurrency(summary.totalUnrealizedPnl),
+      support: percent(summary.totalUnrealizedPnl),
+      tone: valueTone(summary.totalUnrealizedPnl),
+    },
+    { label: "Net Contributions", value: currency(summary.netContributions), tone: "neutral" },
+    { label: "Trading Return", value: "0.00%", support: "(Excluding Deposits)", tone: "neutral", info: true },
+    { label: "Time-Weighted Return", value: percent(summary.timeWeightedReturn).replace("+", ""), tone: valueTone(summary.timeWeightedReturn), info: true },
+    { label: "Benchmark (vs SPY)", value: percent(summary.benchmarkReturn).replace("+", ""), tone: valueTone(summary.benchmarkReturn), info: true },
+  ];
 
   return (
-    <section className="min-w-0 overflow-hidden rounded-lg border border-white/10 bg-[#0d131a]">
-      <div className="flex flex-col gap-4 border-b border-white/8 p-4 md:flex-row md:items-start md:justify-between">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight text-white">Overview</h1>
-          <p className="mt-1 max-w-2xl text-wrap text-sm text-slate-400">
-            Proof screen separating external cash flows from market results. No seeded positions, fake prices, or fabricated
-            performance metrics are shown.
-          </p>
-        </div>
-        <div className="flex items-center gap-2 rounded-md border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-xs text-amber-200">
-          <CalendarClock className="size-4" />
-          Awaiting first portfolio snapshot
-        </div>
-      </div>
+    <div className="mx-auto flex h-full max-w-[920px] flex-col">
+      <h1 className="mb-2 text-[22px] font-semibold tracking-[-0.02em] text-white">Overview</h1>
 
-      <div className="grid gap-px bg-white/8 md:grid-cols-2 xl:grid-cols-5">
-        {metrics.map(([label, value, tone]) => (
-          <MetricCell key={label} label={label} value={value} tone={tone} />
+      <div className="grid grid-cols-2 gap-[10px] xl:grid-cols-5">
+        {metrics.map((metric) => (
+          <MetricCard key={metric.label} {...metric} />
         ))}
       </div>
 
-      <div className="grid min-w-0 gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_280px]">
-        <div className="rounded-md border border-white/10 bg-[#090d12] p-4">
-          <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div>
-              <h2 className="text-sm font-medium text-white">Equity curve</h2>
-              <p className="text-xs text-slate-500">Portfolio value, net contributed capital, and SPY comparison.</p>
+      <section className="mt-[10px] rounded-[4px] border border-[#67809640] bg-[#0d141d] p-3">
+        <div className="mb-2 flex items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-[15px] font-semibold text-white">Portfolio Equity Curve</h2>
+              <Info className="size-3.5 text-[#8b98a8]" />
             </div>
-            <div className="flex gap-1">
-              {rangeOptions.map((option) => (
-                <button
-                  key={option}
-                  className={`rounded px-2 py-1 font-mono text-[11px] ${
-                    range === option ? "bg-slate-700 text-white" : "text-slate-500 hover:bg-slate-900"
-                  }`}
-                  onClick={() => setRange(option)}
-                >
-                  {option}
-                </button>
-              ))}
+            <div className="mt-2 flex flex-wrap gap-4 text-[11px] text-[#a5b0bf]">
+              <Legend swatch="bg-[#4ea3ff]" label="Portfolio Value" />
+              <Legend swatch="border-t border-dashed border-[#8a96a6]" label="Net Contributed Capital" />
+              <Legend swatch="bg-[#9b7cff]" label="SPY (Benchmark)" />
             </div>
           </div>
-          <EmptyChart />
+          <SegmentedControl options={rangeOptions} value={range} onChange={setRange} />
         </div>
+        <EquityChart />
+      </section>
 
-        <div className="rounded-md border border-white/10 bg-[#090d12] p-4">
-          <h2 className="text-sm font-medium text-white">Data quality</h2>
-          <div className="mt-4 space-y-3 text-xs text-slate-400">
-            <QualityRow label="Stock quotes" value="IEX real-time" />
-            <QualityRow label="Options" value="Indicative options feed" />
-            <QualityRow label="Performance" value="Stored snapshots only" />
-            <QualityRow label="External flows" value="Cash ledger, not P/L" />
-          </div>
-        </div>
+      <div className="mt-[10px] grid min-h-0 flex-1 grid-cols-[minmax(0,1.35fr)_minmax(260px,0.85fr)] gap-[10px]">
+        <RecentTrades />
+        <ProofScorecard />
       </div>
-    </section>
+    </div>
+  );
+}
+
+function RightRail({
+  symbolQuery,
+  setSymbolQuery,
+  quoteState,
+  searchResults,
+  clock,
+  marketRange,
+  setMarketRange,
+  isLoadingQuote,
+  isSearching,
+  onQuote,
+  onSearch,
+  depositDraft,
+  setDepositDraft,
+}: {
+  symbolQuery: string;
+  setSymbolQuery: (value: string) => void;
+  quoteState: QuoteResponse;
+  searchResults: SearchResult[];
+  clock: MarketClock | null;
+  marketRange: string;
+  setMarketRange: (value: string) => void;
+  isLoadingQuote: boolean;
+  isSearching: boolean;
+  onQuote: (symbol?: string) => void;
+  onSearch: () => void;
+  depositDraft: {
+    amount: string;
+    date: string;
+    category: string;
+    sourceLabel: string;
+    notes: string;
+  };
+  setDepositDraft: React.Dispatch<
+    React.SetStateAction<{
+      amount: string;
+      date: string;
+      category: string;
+      sourceLabel: string;
+      notes: string;
+    }>
+  >;
+}) {
+  return (
+    <aside className="hidden min-h-0 space-y-[10px] overflow-hidden bg-[#070b10] p-[8px] xl:block">
+      <MarketPanel
+        symbolQuery={symbolQuery}
+        setSymbolQuery={setSymbolQuery}
+        quoteState={quoteState}
+        searchResults={searchResults}
+        clock={clock}
+        marketRange={marketRange}
+        setMarketRange={setMarketRange}
+        isLoadingQuote={isLoadingQuote}
+        isSearching={isSearching}
+        onQuote={onQuote}
+        onSearch={onSearch}
+      />
+      <DepositPanel depositDraft={depositDraft} setDepositDraft={setDepositDraft} />
+    </aside>
   );
 }
 
@@ -412,6 +500,9 @@ function MarketPanel({
   setSymbolQuery,
   quoteState,
   searchResults,
+  clock,
+  marketRange,
+  setMarketRange,
   isLoadingQuote,
   isSearching,
   onQuote,
@@ -421,6 +512,9 @@ function MarketPanel({
   setSymbolQuery: (value: string) => void;
   quoteState: QuoteResponse;
   searchResults: SearchResult[];
+  clock: MarketClock | null;
+  marketRange: string;
+  setMarketRange: (value: string) => void;
   isLoadingQuote: boolean;
   isSearching: boolean;
   onQuote: (symbol?: string) => void;
@@ -429,82 +523,101 @@ function MarketPanel({
   const quote = quoteState.quote;
 
   return (
-    <section className="rounded-lg border border-white/10 bg-[#0d131a] p-4">
-      <div className="mb-4 flex items-center justify-between">
-        <div>
-          <h2 className="text-sm font-semibold text-white">Markets</h2>
-          <p className="text-xs text-slate-500">Real provider responses only</p>
+    <section className="h-[52%] min-h-[478px] overflow-hidden rounded-[4px] border border-[#67809640] bg-[#0d141d]">
+      <PanelTabs left="Markets" right="Watchlist" />
+
+      <div className="space-y-3 p-2">
+        <div className="grid grid-cols-[minmax(0,1fr)_148px] gap-2">
+          <div className="flex h-8 items-center rounded-[4px] border border-[#67809640] bg-[#111a25] px-2">
+            <Search className="size-4 text-[#8794a4]" />
+            <input
+              className="min-w-0 flex-1 bg-transparent px-2 text-[12px] text-white outline-none placeholder:text-[#778494]"
+              value={symbolQuery}
+              placeholder="Search symbol"
+              onChange={(event) => setSymbolQuery(event.target.value.toUpperCase())}
+              onBlur={onSearch}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  onQuote();
+                  onSearch();
+                }
+              }}
+            />
+            {isLoadingQuote || isSearching ? <Loader2 className="size-3.5 animate-spin text-[#8ea0b4]" /> : null}
+          </div>
+          <button className="flex h-8 items-center justify-between rounded-[4px] border border-[#67809640] bg-[#111a25] px-3 text-[12px] text-[#d5deea]">
+            <span className="flex items-center gap-2">
+              <span className="size-1.5 rounded-full bg-[#22d487]" />
+              IEX real-time
+            </span>
+            <ChevronDown className="size-3.5" />
+          </button>
         </div>
-        <Badge variant="outline" className="border-slate-700 text-slate-300">
-          {quote?.source.label ?? "IEX real-time"}
-        </Badge>
-      </div>
 
-      <div className="flex gap-2">
-        <Input
-          className="border-white/10 bg-[#090d12] text-slate-100"
-          value={symbolQuery}
-          onChange={(event) => setSymbolQuery(event.target.value.toUpperCase())}
-          placeholder="AAPL"
-        />
-        <Button variant="secondary" onClick={() => onQuote()} disabled={isLoadingQuote}>
-          {isLoadingQuote ? <Loader2 className="size-4 animate-spin" /> : "Fetch"}
-        </Button>
-        <Button variant="outline" onClick={onSearch} disabled={isSearching}>
-          <SlidersHorizontal className="size-4" />
-        </Button>
-      </div>
+        {quoteState.error ? (
+          <div className="rounded-[4px] border border-[#c7973540] bg-[#2b220d] px-3 py-2 text-[12px] text-[#dfc27c]">
+            {quoteState.error}
+          </div>
+        ) : null}
 
-      {quoteState.error ? (
-        <div className="mt-4 rounded-md border border-amber-400/20 bg-amber-400/5 p-3 text-sm text-amber-100">
-          {quoteState.error}
-        </div>
-      ) : null}
+        {searchResults.length ? (
+          <div className="max-h-24 overflow-auto rounded-[4px] border border-[#67809640] bg-[#0a1017] terminal-scroll">
+            {searchResults.map((result) => (
+              <button
+                key={result.symbol}
+                className="block w-full border-b border-[#67809622] px-3 py-2 text-left hover:bg-[#142033]"
+                onMouseDown={() => onQuote(result.symbol)}
+              >
+                <span className="font-mono text-[12px] text-white">{result.symbol}</span>
+                <span className="ml-2 text-[11px] text-[#8794a4]">{result.exchange ?? result.assetType}</span>
+                <p className="truncate text-[11px] text-[#a8b3c0]">{result.name}</p>
+              </button>
+            ))}
+          </div>
+        ) : null}
 
-      {quote ? (
-        <div className="mt-4 space-y-4">
-          <div className="flex items-end justify-between">
+        <div className="rounded-[4px] border border-[#67809626] bg-[#0a1017]">
+          <div className="grid grid-cols-[1fr_1px_140px] gap-3 p-3">
             <div>
-              <p className="text-xs text-slate-500">{quote.symbol}</p>
-              <p className="font-mono text-3xl font-semibold text-white">{nullableCurrency(quote.mark)}</p>
+              <p className="font-mono text-[19px] font-semibold text-white">{quote?.symbol ?? "-"}</p>
+              <p className="mt-3 font-mono text-[12px] text-[#9aa7b7]">{quote ? nullableCurrency(quote.mark) : "-"}</p>
+              <p className={`mt-1 font-mono text-[12px] ${valueClass(quote?.dayChange ?? 0)}`}>
+                {quote?.dayChange === undefined || quote.dayChange === null
+                  ? "- (-%)"
+                  : `${signedCurrency(quote.dayChange)} (${percent(quote.dayChangePercent ?? 0)})`}
+              </p>
             </div>
-            <p className={`font-mono text-sm ${valueClass(quote.dayChange ?? 0)}`}>
-              {quote.dayChange === null ? "No day change" : `${signedCurrency(quote.dayChange)} (${percent(quote.dayChangePercent ?? 0)})`}
-            </p>
+            <div className="bg-[#67809626]" />
+            <div className="space-y-2 text-[12px]">
+              <QuoteLine label="Bid" value={quote ? nullableCurrency(quote.bid) : "-"} />
+              <QuoteLine label="Ask" value={quote ? nullableCurrency(quote.ask) : "-"} />
+              <QuoteLine label="Vol" value={quote?.volume === null || !quote ? "-" : quote.volume.toLocaleString()} />
+            </div>
           </div>
-          <div className="grid grid-cols-2 gap-px overflow-hidden rounded-md border border-white/10 bg-white/8">
-            <QuoteCell label="Bid" value={nullableCurrency(quote.bid)} />
-            <QuoteCell label="Ask" value={nullableCurrency(quote.ask)} />
-            <QuoteCell label="Day range" value={`${nullableCurrency(quote.dayLow)} - ${nullableCurrency(quote.dayHigh)}`} />
-            <QuoteCell label="Volume" value={quote.volume === null ? "Unavailable" : quote.volume.toLocaleString()} />
-          </div>
-          <p className="flex items-center gap-2 text-xs text-slate-500">
-            <Clock3 className="size-3.5" />
-            Last updated {formatTimestamp(quote.source.asOf)}
-          </p>
-        </div>
-      ) : (
-        <div className="mt-4 rounded-md border border-dashed border-white/10 p-4 text-sm text-slate-500">
-          Fetch a ticker to show real bid, ask, mark, source, and timestamp. Mock quotes are not substituted.
-        </div>
-      )}
 
-      {searchResults.length ? (
-        <div className="mt-4 space-y-2">
-          <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Search results</p>
-          {searchResults.map((result) => (
-            <button
-              key={result.symbol}
-              className="w-full rounded-md border border-white/10 p-3 text-left hover:bg-slate-900"
-              onClick={() => onQuote(result.symbol)}
-            >
-              <span className="font-mono text-sm text-white">{result.symbol}</span>
-              <span className="ml-2 text-xs text-slate-500">{result.exchange ?? result.assetType}</span>
-              <p className="mt-1 truncate text-xs text-slate-400">{result.name}</p>
+          <div className="flex items-center justify-between px-3 pb-3">
+            <SegmentedControl options={marketRangeOptions} value={marketRange} onChange={setMarketRange} compact />
+            <button className="rounded-[4px] border border-[#67809640] bg-[#111a25] p-2 text-[#a8b3c0]">
+              <BarChart3 className="size-3.5" />
             </button>
-          ))}
+          </div>
+
+          <div className="relative mx-3 h-[248px] border-t border-[#67809626] chart-grid">
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-center text-[12px] text-[#9aa7b7]">
+              <Search className="size-7 text-[#7c8998]" />
+              {quote ? "Chart history will render from provider bars." : "Enter a symbol to view quote"}
+            </div>
+          </div>
+
+          <div className="flex h-9 items-center justify-between border-t border-[#67809626] px-3 font-mono text-[11px] text-[#9aa7b7]">
+            <span className="flex items-center gap-2">
+              <span className={`size-1.5 rounded-full ${clock?.isOpen ? "bg-[#22d487]" : "bg-[#ff5a5f]"}`} />
+              {marketStatusLabel(clock)}
+            </span>
+            <span>{formatTimestamp(quote?.source.asOf ?? clock?.timestamp ?? null, "time")}</span>
+          </div>
         </div>
-      ) : null}
+      </div>
     </section>
   );
 }
@@ -531,92 +644,90 @@ function DepositPanel({
   >;
 }) {
   return (
-    <section className="rounded-lg border border-white/10 bg-[#0d131a] p-4">
-      <div className="mb-4">
-        <h2 className="text-sm font-semibold text-white">Deposits & Cash</h2>
-        <p className="text-xs text-slate-500">External money is tracked separately from performance.</p>
+    <section className="h-[calc(48%-10px)] min-h-[368px] overflow-hidden rounded-[4px] border border-[#67809640] bg-[#0d141d]">
+      <div className="flex h-9 items-center justify-between border-b border-[#67809633] px-3">
+        <h2 className="text-[14px] font-semibold text-white">Deposits & Cash</h2>
+        <ChevronUp className="size-4 text-[#c6d0dc]" />
       </div>
-      <FieldGroup>
-        <Field>
-          <FieldLabel className="text-slate-400">Amount</FieldLabel>
-          <Input
-            className="border-white/10 bg-[#090d12] text-slate-100"
-            inputMode="decimal"
-            value={depositDraft.amount}
-            placeholder="0.00"
-            onChange={(event) => setDepositDraft((current) => ({ ...current, amount: event.target.value }))}
-          />
-        </Field>
-        <Field>
-          <FieldLabel className="text-slate-400">Date</FieldLabel>
-          <Input
-            className="border-white/10 bg-[#090d12] text-slate-100"
-            type="date"
-            value={depositDraft.date}
-            onChange={(event) => setDepositDraft((current) => ({ ...current, date: event.target.value }))}
-          />
-        </Field>
-        <div className="grid grid-cols-2 gap-3">
-          <Field>
-            <FieldLabel className="text-slate-400">Category</FieldLabel>
+
+      <div className="p-2">
+        <div className="grid grid-cols-2 overflow-hidden rounded-[4px] border border-[#67809626] bg-[#0a1017] text-[12px]">
+          <button className="h-7 bg-[#172232] font-medium text-white">Deposit Funds</button>
+          <button className="h-7 text-[#9aa7b7]">Transfer</button>
+        </div>
+
+        <div className="mt-2 space-y-1.5 text-[12px]">
+          <FormField label="Amount (USD)">
+            <div className="flex h-7 items-center rounded-[4px] border border-[#67809640] bg-[#111a25] px-3">
+              <span className="mr-2 font-mono text-[#9aa7b7]">$</span>
+              <input
+                className="min-w-0 flex-1 bg-transparent font-mono text-[12px] text-white outline-none placeholder:text-[#6f7c8c]"
+                inputMode="decimal"
+                value={depositDraft.amount}
+                placeholder="0.00"
+                onChange={(event) => setDepositDraft((current) => ({ ...current, amount: event.target.value }))}
+              />
+            </div>
+          </FormField>
+
+          <FormField label="Date">
+            <input
+              className="h-7 w-full rounded-[4px] border border-[#67809640] bg-[#111a25] px-3 font-mono text-[12px] text-[#d7e0eb] outline-none"
+              type="date"
+              value={depositDraft.date}
+              onChange={(event) => setDepositDraft((current) => ({ ...current, date: event.target.value }))}
+            />
+          </FormField>
+
+          <FormField label="Category">
             <select
-              className="h-9 rounded-md border border-white/10 bg-[#090d12] px-3 text-sm text-slate-100"
+              className="h-7 w-full rounded-[4px] border border-[#67809640] bg-[#111a25] px-3 text-[12px] text-[#d7e0eb] outline-none"
               value={depositDraft.category}
               onChange={(event) => setDepositDraft((current) => ({ ...current, category: event.target.value }))}
             >
+              <option value="">Select category</option>
               <option value="paycheck">Paycheck</option>
               <option value="bonus">Bonus</option>
-              <option value="manual contribution">Manual</option>
+              <option value="manual contribution">Manual Contribution</option>
               <option value="correction">Correction</option>
             </select>
-          </Field>
-          <Field>
-            <FieldLabel className="text-slate-400">Source</FieldLabel>
-            <Input
-              className="border-white/10 bg-[#090d12] text-slate-100"
+          </FormField>
+
+          <FormField label="Source">
+            <select
+              className="h-7 w-full rounded-[4px] border border-[#67809640] bg-[#111a25] px-3 text-[12px] text-[#d7e0eb] outline-none"
               value={depositDraft.sourceLabel}
-              placeholder="Employer"
               onChange={(event) => setDepositDraft((current) => ({ ...current, sourceLabel: event.target.value }))}
+            >
+              <option value="Manual Deposit">Manual Deposit</option>
+              <option value="Bank Transfer">Bank Transfer</option>
+              <option value="Payroll">Payroll</option>
+              <option value="Correction">Correction</option>
+            </select>
+          </FormField>
+
+          <FormField label="Notes (optional)">
+            <input
+              className="h-7 w-full rounded-[4px] border border-[#67809640] bg-[#111a25] px-3 text-[12px] text-white outline-none placeholder:text-[#6f7c8c]"
+              value={depositDraft.notes}
+              placeholder="Add a note for this deposit"
+              onChange={(event) => setDepositDraft((current) => ({ ...current, notes: event.target.value }))}
             />
-          </Field>
+          </FormField>
+
+          <button
+            className="mt-1 h-8 w-full rounded-[4px] bg-[#2e67b7] text-[12px] font-semibold text-white hover:bg-[#3573c8]"
+            type="button"
+            onClick={() => window.alert("Sign in is required before recording deposits.")}
+          >
+            Record Deposit
+          </button>
         </div>
-        <Field>
-          <FieldLabel className="text-slate-400">Notes</FieldLabel>
-          <Textarea
-            className="min-h-20 border-white/10 bg-[#090d12] text-slate-100"
-            value={depositDraft.notes}
-            onChange={(event) => setDepositDraft((current) => ({ ...current, notes: event.target.value }))}
-          />
-        </Field>
-        <Button disabled variant="secondary" className="w-full opacity-60">
-          Connect Supabase auth to post deposit
-        </Button>
-        <p className="text-xs leading-5 text-slate-500">
-          The database and RLS foundation is in place. Posting is disabled until an authenticated Supabase account context is
-          available, so drafts are not silently stored in localStorage.
-        </p>
-      </FieldGroup>
-    </section>
-  );
-}
 
-function ProofScorecard() {
-  const rows = [
-    ["Win rate", "No closed trades"],
-    ["Average win", "No closed trades"],
-    ["Average loss", "No closed trades"],
-    ["Profit factor", "No closed trades"],
-    ["Max drawdown", "No snapshots"],
-    ["Average holding period", "No closed trades"],
-  ];
-
-  return (
-    <section className="rounded-lg border border-white/10 bg-[#0d131a] p-4">
-      <h2 className="text-sm font-semibold text-white">Proof scorecard</h2>
-      <div className="mt-4 space-y-3">
-        {rows.map(([label, value]) => (
-          <QualityRow key={label} label={label} value={value} />
-        ))}
+        <button className="mt-3 flex items-center gap-2 text-[12px] text-[#c6d0dc] hover:text-white">
+          View deposit history
+          <ExternalLink className="size-3.5" />
+        </button>
       </div>
     </section>
   );
@@ -624,123 +735,329 @@ function ProofScorecard() {
 
 function RecentTrades() {
   return (
-    <section className="rounded-lg border border-white/10 bg-[#0d131a]">
-      <div className="border-b border-white/8 p-4">
-        <h2 className="text-sm font-semibold text-white">Recent trades</h2>
-        <p className="text-xs text-slate-500">Closed trades will be immutable and corrected through adjustment events.</p>
+    <section className="flex min-h-0 flex-col rounded-[4px] border border-[#67809640] bg-[#0d141d]">
+      <div className="flex h-11 items-center justify-between border-b border-[#67809633] px-3">
+        <h2 className="text-[15px] font-semibold text-white">Recent Trades</h2>
+        <div className="grid grid-cols-3 overflow-hidden rounded-[4px] border border-[#67809633] bg-[#0a1017] text-[12px]">
+          {["All", "Stocks", "Options"].map((tab) => (
+            <button key={tab} className={`h-8 px-4 ${tab === "All" ? "bg-[#182332] text-white" : "text-[#a8b3c0]"}`}>
+              {tab}
+            </button>
+          ))}
+        </div>
       </div>
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[680px] text-sm">
-          <thead className="bg-[#090d12] text-xs text-slate-500">
-            <tr>
-              {["Time", "Symbol", "Type", "Side", "Qty", "Fill", "Thesis", "Status"].map((head) => (
-                <th key={head} className="px-4 py-3 text-left font-medium">
-                  {head}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td colSpan={8} className="px-4 py-10 text-center text-slate-500">
-                No trades yet. The terminal will only show orders filled from stored quote timestamps and bid/ask data.
-              </td>
-            </tr>
-          </tbody>
-        </table>
+
+      <table className="w-full table-fixed text-[12px]">
+        <thead className="h-9 bg-[#111a25] text-[#b5c0ce]">
+          <tr>
+            {["Time", "Symbol", "Side", "Quantity", "Type", "Price", "Status"].map((head) => (
+              <th key={head} className="px-3 text-left font-medium">
+                {head}
+              </th>
+            ))}
+          </tr>
+        </thead>
+      </table>
+
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center text-center">
+        <FileText className="mb-3 size-14 text-[#778494]" strokeWidth={1.4} />
+        <p className="text-[15px] font-semibold text-white">No trades yet</p>
+        <p className="mt-2 text-[12px] text-[#9aa7b7]">Your recent trades will appear here.</p>
+      </div>
+
+      <div className="flex h-10 items-center justify-between border-t border-[#67809633] px-3 text-[12px] text-[#c6d0dc]">
+        <button className="hover:text-white">View all trades</button>
+        <span>0 trades</span>
       </div>
     </section>
   );
 }
 
-function CashLedgerPreview() {
-  return (
-    <section className="rounded-lg border border-white/10 bg-[#0d131a]">
-      <div className="border-b border-white/8 p-4">
-        <h2 className="text-sm font-semibold text-white">Cash-flow timeline</h2>
-        <p className="text-xs text-slate-500">Deposits, withdrawals, fees, dividends, and trade credits/debits.</p>
-      </div>
-      <div className="flex h-56 items-center justify-center p-4 text-center text-sm text-slate-500">
-        No ledger entries yet. Add authenticated cash flows to build contribution and TWR history.
-      </div>
-    </section>
-  );
-}
+function ProofScorecard() {
+  const rows = [
+    ["Total Trades", "0"],
+    ["Win Rate", "0.00%"],
+    ["Profit Factor", "0.00"],
+    ["Avg Win", "$0.00"],
+    ["Avg Loss", "$0.00"],
+    ["Expectancy per Trade", "$0.00"],
+    ["Max Drawdown", "0.00%"],
+    ["Best Day", "$0.00 (0.00%)"],
+    ["Worst Day", "$0.00 (0.00%)"],
+  ];
 
-function MetricCell({ label, value, tone }: { label: string; value: string; tone: string }) {
   return (
-    <div className="bg-[#0d131a] p-4">
-      <p className="text-xs text-slate-500">{label}</p>
-      <p className={`mt-2 font-mono text-lg font-semibold ${toneClass(tone)}`}>{value}</p>
-    </div>
-  );
-}
-
-function EmptyChart() {
-  return (
-    <div className="relative h-[320px] overflow-hidden rounded-md border border-white/8 bg-[#070a0e]">
-      <div className="absolute inset-0 chart-grid" />
-      <div className="absolute inset-x-6 bottom-10 top-8 flex items-end justify-between opacity-30">
-        {Array.from({ length: 18 }).map((_, index) => (
-          <div key={index} className="h-full w-px bg-slate-800" />
+    <section className="flex min-h-0 flex-col rounded-[4px] border border-[#67809640] bg-[#0d141d] p-3">
+      <div className="mb-3 flex items-center gap-2">
+        <h2 className="text-[15px] font-semibold text-white">Proof Scorecard</h2>
+        <Info className="size-3.5 text-[#8b98a8]" />
+      </div>
+      <div className="overflow-hidden rounded-[3px] border border-[#67809626]">
+        {rows.map(([label, value]) => (
+          <div key={label} className="flex h-[31px] items-center justify-between border-b border-[#67809626] bg-[#111922] px-3 text-[12px] last:border-0">
+            <span className="text-[#b9c4d1]">{label}</span>
+            <span className={`font-mono text-white ${label === "Best Day" ? "text-[#91d66f]" : ""} ${label === "Worst Day" ? "text-[#ff666b]" : ""}`}>
+              {value}
+            </span>
+          </div>
         ))}
       </div>
+      <div className="mt-auto flex h-10 items-center border-t border-[#67809633] text-[12px]">
+        <button className="flex items-center gap-2 text-[#c6d0dc] hover:text-white">
+          View performance
+          <ChevronRight className="size-4" />
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function EquityChart() {
+  const months = ["May '24", "Jun '24", "Jul '24", "Aug '24", "Sep '24", "Oct '24", "Nov '24", "Dec '24", "Jan '25", "Feb '25", "Mar '25", "Apr '25", "May '25"];
+  const ticks = ["10K", "5K", "0", "-5K", "-10K"];
+
+  return (
+    <div className="relative h-[216px] overflow-hidden bg-[#0d141d]">
+      <div className="absolute inset-x-0 bottom-8 top-2 grid grid-rows-5">
+        {ticks.map((tick) => (
+          <div key={tick} className="relative border-b border-[#67809622]">
+            <span className="absolute -top-2 left-0 font-mono text-[11px] text-[#9aa7b7]">{tick}</span>
+          </div>
+        ))}
+      </div>
+      <div className="absolute inset-x-[28px] top-[96px] border-t border-dashed border-[#8996a680]" />
       <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-        <LineChart className="mb-3 size-9 text-slate-600" />
-        <p className="text-sm font-medium text-slate-300">No stored snapshots</p>
-        <p className="mt-1 max-w-sm text-xs leading-5 text-slate-500">
-          Equity curves unlock after real positions, cash flows, and dated portfolio snapshots exist in Supabase.
-        </p>
+        <p className="text-[14px] font-semibold text-[#e7edf4]">No data to display.</p>
+        <p className="mt-2 text-[12px] text-[#b2bdc9]">Make a deposit or place a trade to see your performance over time.</p>
+      </div>
+      <div className="absolute inset-x-[34px] bottom-0 flex justify-between font-mono text-[11px] text-[#9aa7b7]">
+        {months.map((month) => (
+          <span key={month}>{month}</span>
+        ))}
       </div>
     </div>
   );
 }
 
-function QuoteCell({ label, value }: { label: string; value: string }) {
+function MetricCard({
+  label,
+  value,
+  support,
+  tone,
+  info,
+}: {
+  label: string;
+  value: string;
+  support?: string;
+  tone: string;
+  info?: boolean;
+}) {
   return (
-    <div className="bg-[#0d131a] p-3">
-      <p className="text-xs text-slate-500">{label}</p>
-      <p className="mt-1 font-mono text-sm text-slate-100">{value}</p>
+    <div className="h-[94px] rounded-[4px] border border-[#67809640] bg-[#0d141d] p-3 shadow-[0_8px_20px_rgba(0,0,0,0.16)]">
+      <div className="flex items-center gap-1.5 text-[12px] font-medium text-[#c2ccd8]">
+        <span className="truncate">{label}</span>
+        {info ? <Info className="size-3.5 shrink-0 text-[#8b98a8]" /> : null}
+      </div>
+      <p className={`mt-3 font-mono text-[20px] font-semibold leading-none ${toneClass(tone)}`}>{value}</p>
+      {support ? <p className={`mt-2 font-mono text-[12px] ${supportToneClass(tone)}`}>{support}</p> : null}
     </div>
   );
 }
 
-function QualityRow({ label, value }: { label: string; value: string }) {
+function PanelTabs({ left, right }: { left: string; right: string }) {
   return (
-    <div className="flex items-start justify-between gap-4">
-      <span className="text-slate-500">{label}</span>
-      <span className="max-w-40 text-right text-slate-300">{value}</span>
+    <div className="grid h-10 grid-cols-[1fr_1fr_36px] border-b border-[#67809633] text-[13px]">
+      <button className="border-b-2 border-[#4ea3ff] font-semibold text-white">{left}</button>
+      <button className="text-[#a8b3c0]">{right}</button>
+      <button className="flex items-center justify-center text-[#c6d0dc]">
+        <ChevronUp className="size-4" />
+      </button>
     </div>
   );
 }
 
-function StatusPill({ label, tone }: { label: string; tone: "positive" | "neutral" }) {
+function SegmentedControl({
+  options,
+  value,
+  onChange,
+  compact = false,
+}: {
+  options: readonly string[];
+  value: string;
+  onChange: (value: string) => void;
+  compact?: boolean;
+}) {
   return (
-    <span
-      className={`rounded-md border px-2 py-1 ${
-        tone === "positive" ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-300" : "border-white/10 text-slate-300"
-      }`}
-    >
+    <div className={`flex overflow-hidden rounded-[4px] border border-[#67809633] bg-[#0a1017] ${compact ? "border-0 bg-transparent" : ""}`}>
+      {options.map((option) => (
+        <button
+          key={option}
+          className={`${compact ? "h-8 px-2.5" : "h-8 px-3.5"} font-mono text-[12px] ${
+            value === option ? "rounded-[4px] bg-[#1a2635] text-white" : "text-[#a8b3c0] hover:bg-[#111a25]"
+          }`}
+          onClick={() => onChange(option)}
+        >
+          {option}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function FormField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="block">
+      <span className="mb-0.5 block text-[11px] text-[#c2ccd8]">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function StatusBlock({
+  dotTone,
+  label,
+  detail,
+}: {
+  dotTone: "positive" | "negative" | "warning";
+  label: string;
+  detail: string;
+}) {
+  const dotClass = dotTone === "positive" ? "bg-[#22d487]" : dotTone === "negative" ? "bg-[#ff5a5f]" : "bg-[#c79735]";
+
+  return (
+    <div className="flex items-start gap-2 whitespace-nowrap">
+      <span className={`mt-1 size-1.5 rounded-full ${dotClass}`} />
+      <div>
+        <p className="font-semibold leading-4 text-[#dce5ef]">{label}</p>
+        <p className="leading-4 text-[#c6d0dc]">{detail}</p>
+      </div>
+    </div>
+  );
+}
+
+function TerminalFooter() {
+  return (
+    <footer className="flex items-center justify-between border-t border-[#7a5a153f] bg-[#17170d] px-4 text-[11px] text-[#c6d0dc]">
+      <div className="flex items-center gap-2">
+        <AlertTriangle className="size-4 text-[#d5a72c]" />
+        <span>Paper trading is for educational purposes only. It does not guarantee future results.</span>
+      </div>
+      <div className="flex items-center gap-5">
+        <span>
+          Data provided by <span className="text-[#4ea3ff]">Alpaca Markets</span>
+        </span>
+        <HeaderDivider />
+        <span className="flex items-center gap-3">
+          System Status
+          <span className="size-1.5 rounded-full bg-[#45d66b]" />
+        </span>
+      </div>
+    </footer>
+  );
+}
+
+function LogoMark() {
+  return (
+    <div className="flex size-7 items-center justify-center rounded-[4px] bg-white text-[#070b10]">
+      <ShieldCheck className="size-4" strokeWidth={2.4} />
+    </div>
+  );
+}
+
+function Legend({ swatch, label }: { swatch: string; label: string }) {
+  return (
+    <span className="flex items-center gap-2">
+      <span className={`h-0.5 w-4 ${swatch}`} />
       {label}
     </span>
   );
 }
 
-function nullableCurrency(value: number | null) {
-  return value === null ? "Unavailable" : currency(value);
+function QuoteLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <span className="text-[#c2ccd8]">{label}</span>
+      <span className="font-mono text-white">{value}</span>
+    </div>
+  );
 }
 
-function formatTimestamp(value: string | null) {
+function SidebarValue({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between py-1.5">
+      <span className="text-[#c2ccd8]">{label}</span>
+      <span className="font-mono text-[#e7edf4]">{value}</span>
+    </div>
+  );
+}
+
+function HeaderDivider() {
+  return <div className="h-7 w-px bg-[#67809659]" />;
+}
+
+function nullableCurrency(value: number | null) {
+  return value === null ? "-" : currency(value);
+}
+
+function zeroCurrency(value: number) {
+  return value === 0 ? "$0.00" : signedCurrency(value);
+}
+
+function marketStatusLabel(clock: MarketClock | null, providerError?: string) {
+  if (!clock && providerError) {
+    return "Market Unavailable";
+  }
+
+  if (!clock) {
+    return "Market Status";
+  }
+
+  return clock.isOpen ? "Market Open" : "Market Closed";
+}
+
+function marketStatusDetail(clock: MarketClock | null, providerError?: string) {
+  if (!clock && providerError) {
+    return "Configure Alpaca";
+  }
+
+  if (!clock) {
+    return "Checking status";
+  }
+
+  const target = clock.isOpen ? clock.nextClose : clock.nextOpen;
+  const prefix = clock.isOpen ? "Closes" : "Opens";
+
+  return target ? `${prefix} ${relativeDuration(target)}` : formatTimestamp(clock.timestamp, "time");
+}
+
+function relativeDuration(value: string) {
+  const diffMs = new Date(value).getTime() - Date.now();
+
+  if (!Number.isFinite(diffMs) || diffMs <= 0) {
+    return "soon";
+  }
+
+  const totalMinutes = Math.round(diffMs / 60_000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  if (hours > 0) {
+    return `in ${hours}h ${minutes}m`;
+  }
+
+  return `in ${minutes}m`;
+}
+
+function formatTimestamp(value: string | null, mode: "time" | "datetime" = "datetime") {
   if (!value) {
-    return "unavailable";
+    return "-";
   }
 
   return new Intl.DateTimeFormat("en-US", {
     hour: "numeric",
     minute: "2-digit",
     second: "2-digit",
-    month: "short",
-    day: "numeric",
+    ...(mode === "datetime" ? { month: "short", day: "numeric" } : {}),
   }).format(new Date(value));
 }
 
@@ -751,11 +1068,17 @@ function valueTone(value: number) {
 }
 
 function toneClass(tone: string) {
-  if (tone === "positive") return "text-emerald-300";
-  if (tone === "negative") return "text-red-300";
-  return "text-slate-100";
+  if (tone === "positive") return "text-[#91d66f]";
+  if (tone === "negative") return "text-[#ff666b]";
+  return "text-[#f1f5f9]";
+}
+
+function supportToneClass(tone: string) {
+  if (tone === "positive") return "text-[#91d66f]";
+  if (tone === "negative") return "text-[#ff666b]";
+  return "text-[#9aa7b7]";
 }
 
 function valueClass(value: number) {
-  return value > 0 ? "text-emerald-300" : value < 0 ? "text-red-300" : "text-slate-400";
+  return value > 0 ? "text-[#91d66f]" : value < 0 ? "text-[#ff666b]" : "text-[#9aa7b7]";
 }

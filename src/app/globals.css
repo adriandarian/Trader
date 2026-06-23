@@ -146,3 +146,8 @@
     linear-gradient(to bottom, rgb(148 163 184 / 0.08) 1px, transparent 1px);
   background-size: 44px 44px;
 }
+
+.terminal-scroll {
+  scrollbar-color: rgb(103 128 150 / 0.42) transparent;
+  scrollbar-width: thin;
+}
