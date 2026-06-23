@@ -1,36 +1,110 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Proof Portfolio
 
-## Getting Started
+Proof Portfolio is a personal paper-trading terminal for proving whether trading performance is real after separating external contributions from trading profit and loss.
 
-First, run the development server:
+The app is intentionally strict:
+
+- No seeded portfolio data.
+- No localStorage as source of truth.
+- No fake prices or fabricated charts.
+- Market prices are displayed only from server-side market-data provider responses.
+- Deposits and withdrawals are external cash flows, not trading P/L.
+- Closed trade history is designed to be immutable and corrected through adjustment events.
+
+## Setup
+
+### 1. Supabase setup
+
+Create a Supabase project and copy the pooled Postgres connection string into:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+DATABASE_URL="postgresql://postgres:[password]@[project-ref].supabase.co:5432/postgres"
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The schema is designed around Supabase Auth ownership. `profiles.id` and `accounts.user_id` reference `auth.users.id`, and account-owned tables use RLS policies that compare ownership to `auth.uid()`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### 2. SQL migrations
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Run the existing Drizzle migrations against the Supabase database:
 
-## Learn More
+```bash
+npm run db:migrate
+```
 
-To learn more about Next.js, take a look at the following resources:
+If you prefer to apply SQL manually, run:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+drizzle/0000_useful_rogue.sql
+drizzle/0001_proof_portfolio_phase_1.sql
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+`0001_proof_portfolio_phase_1.sql` adds the Phase 1 tables, indexes, and RLS policies:
 
-## Deploy on Vercel
+- `profiles`
+- `accounts`
+- `cash_ledger_entries`
+- `instruments`
+- `orders`
+- `fills`
+- `positions`
+- `journal_entries`
+- `portfolio_snapshots`
+- `audit_events`
+- `watchlist_items`
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### 3. Alpaca API key configuration
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Create Alpaca paper-trading API keys and set:
+
+```bash
+ALPACA_API_KEY="..."
+ALPACA_API_SECRET="..."
+MARKET_DATA_PROVIDER="alpaca"
+ALPACA_STOCK_FEED="iex"
+ALPACA_OPTION_FEED="indicative"
+```
+
+The first provider implementation uses Alpaca from server-only route handlers. The UI labels stock quotes with the returned feed label, timestamp, and market clock state. Options contracts and snapshots are supported in the provider layer; if an options feed is unavailable, the provider returns an error instead of substituting fake quotes.
+
+### 4. Vercel environment variables
+
+Configure these in Vercel Project Settings:
+
+```bash
+DATABASE_URL
+ALPACA_API_KEY
+ALPACA_API_SECRET
+MARKET_DATA_PROVIDER
+ALPACA_STOCK_FEED
+ALPACA_OPTION_FEED
+```
+
+Do not prefix Alpaca or database secrets with `NEXT_PUBLIC_`.
+
+### 5. Local development commands
+
+```bash
+npm install
+npm run dev
+npm test
+npm run lint
+npm run build
+```
+
+## Current Phase
+
+Implemented:
+
+- Dark desktop-first terminal shell with fixed sidebar and compact command bar.
+- Overview proof screen with empty/zero states that do not invent performance.
+- Markets quote/search panel wired through server-side API routes.
+- Alpaca provider abstraction under `src/lib/market-data`.
+- Supabase/Drizzle schema and RLS migration foundation.
+- Unit tests for cash ledger math, bid/ask execution price logic, contribution separation, and time-weighted return.
+
+Known limitations:
+
+- Supabase Auth UI and account selection are not wired yet, so the deposit form does not post records. It is intentionally disabled rather than writing to localStorage.
+- Portfolio holdings, order execution, fills, and snapshots are schema-backed but not yet connected to authenticated server actions.
+- Options UI is not exposed yet. Provider methods exist for contract lookup and snapshots, but the first visible workflow is stock quote discovery.
+- The mock provider exists only as an explicit `MARKET_DATA_PROVIDER=mock` development fallback and does not return prices. Nothing displayed in the default app is mocked.

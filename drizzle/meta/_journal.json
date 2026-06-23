@@ -8,6 +8,13 @@
       "when": 1782198121499,
       "tag": "0000_useful_rogue",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1782260700000,
+      "tag": "0001_proof_portfolio_phase_1",
+      "breakpoints": true
     }
   ]
 }

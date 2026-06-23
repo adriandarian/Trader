@@ -2,762 +2,760 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
-import { Activity, BookOpen, Landmark, LineChart, Plus, ShieldCheck, Wallet } from "lucide-react";
+  Activity,
+  BarChart3,
+  BookOpen,
+  BriefcaseBusiness,
+  CalendarClock,
+  CircleDollarSign,
+  Clock3,
+  Landmark,
+  LineChart,
+  Loader2,
+  Search,
+  Settings,
+  ShieldCheck,
+  SlidersHorizontal,
+} from "lucide-react";
 
-import {
-  auditEvent,
-  calculatePortfolio,
-  currency,
-  getTradePnL,
-  ledgerEntryForClosedTrade,
-  ledgerEntryForTrade,
-  percent,
-} from "@/domain/accounting";
-import { initialState } from "@/domain/seed";
-import type { AssetType, LedgerEntry, ProofPortfolioState, Trade } from "@/domain/types";
+import { currency, percent, signedCurrency, summarizeProofPortfolio } from "@/domain/accounting";
+import type { ProofPortfolioSummary } from "@/domain/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Separator } from "@/components/ui/separator";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 
-const storageKey = "proof-portfolio-state-v1";
-
-type TradeForm = {
-  ticker: string;
-  assetType: AssetType;
-  action: "buy" | "sell";
-  quantity: string;
-  entryPrice: string;
-  openedAt: string;
-  thesis: string;
-  strategy: string;
-  riskAmount: string;
-  target: string;
-  stopLoss: string;
-  notes: string;
-  underlyingTicker: string;
-  optionType: "call" | "put";
-  strike: string;
-  expirationDate: string;
-  premium: string;
-  contracts: string;
-  strategyTag: string;
-  maxLoss: string;
-  maxProfit: string;
+type QuoteResponse = {
+  quote?: {
+    symbol: string;
+    bid: number | null;
+    ask: number | null;
+    last: number | null;
+    mark: number | null;
+    dayChange: number | null;
+    dayChangePercent: number | null;
+    dayHigh: number | null;
+    dayLow: number | null;
+    volume: number | null;
+    source: {
+      label: string;
+      asOf: string | null;
+      feed: string;
+    };
+  };
+  clock?: {
+    isOpen: boolean | null;
+    timestamp: string;
+    nextOpen: string | null;
+    nextClose: string | null;
+  } | null;
+  error?: string;
+  code?: string;
 };
 
-const emptyTradeForm: TradeForm = {
-  ticker: "AAPL",
-  assetType: "stock" as AssetType,
-  action: "buy" as const,
-  quantity: "1",
-  entryPrice: "100",
-  openedAt: new Date().toISOString().slice(0, 10),
-  thesis: "",
-  strategy: "",
-  riskAmount: "50",
-  target: "120",
-  stopLoss: "95",
-  notes: "",
-  underlyingTicker: "",
-  optionType: "call" as const,
-  strike: "",
-  expirationDate: "",
-  premium: "",
-  contracts: "",
-  strategyTag: "",
-  maxLoss: "",
-  maxProfit: "",
+type SearchResult = {
+  symbol: string;
+  name: string;
+  exchange?: string;
+  assetType: string;
+  tradable?: boolean;
 };
+
+const navItems = [
+  ["Overview", Activity],
+  ["Markets", LineChart],
+  ["Portfolio", BriefcaseBusiness],
+  ["Trade", CircleDollarSign],
+  ["Journal", BookOpen],
+  ["Deposits & Cash", Landmark],
+  ["Performance", BarChart3],
+  ["Settings", Settings],
+] as const;
+
+const rangeOptions = ["1W", "1M", "3M", "YTD", "All"];
 
 export function ProofPortfolioApp() {
-  const [state, setState] = useState<ProofPortfolioState>(() => {
-    if (typeof window === "undefined") {
-      return initialState;
-    }
-
-    const stored = window.localStorage.getItem(storageKey);
-    return stored ? (JSON.parse(stored) as ProofPortfolioState) : initialState;
-  });
-  const [depositForm, setDepositForm] = useState({
-    amount: "1250",
+  const [activeSection, setActiveSection] = useState("Overview");
+  const [symbolQuery, setSymbolQuery] = useState("SPY");
+  const [quoteState, setQuoteState] = useState<QuoteResponse>({});
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [isLoadingQuote, setIsLoadingQuote] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
+  const [range, setRange] = useState("1M");
+  const [depositDraft, setDepositDraft] = useState({
+    amount: "",
     date: new Date().toISOString().slice(0, 10),
-    source: "Paycheck",
+    category: "paycheck",
+    sourceLabel: "",
     notes: "",
   });
-  const [tradeForm, setTradeForm] = useState(emptyTradeForm);
-  const [closePrices, setClosePrices] = useState<Record<string, string>>({});
-  const [activeTab, setActiveTab] = useState("overview");
-  const [chartsReady, setChartsReady] = useState(false);
+
+  const summary = useMemo(
+    () =>
+      summarizeProofPortfolio({
+        cashLedgerEntries: [],
+        positions: [],
+        snapshots: [],
+      }),
+    [],
+  );
 
   useEffect(() => {
-    window.localStorage.setItem(storageKey, JSON.stringify(state));
-  }, [state]);
+    const controller = new AbortController();
 
-  useEffect(() => {
-    const frame = window.requestAnimationFrame(() => setChartsReady(true));
-    return () => window.cancelAnimationFrame(frame);
+    async function loadInitialQuote() {
+      setIsLoadingQuote(true);
+
+      try {
+        const response = await fetch("/api/market-data/quote?symbol=SPY", { signal: controller.signal });
+        const payload = (await response.json()) as QuoteResponse;
+        setQuoteState(payload);
+      } catch {
+        if (!controller.signal.aborted) {
+          setQuoteState({ error: "Unable to reach the market-data route.", code: "NETWORK_ERROR" });
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setIsLoadingQuote(false);
+        }
+      }
+    }
+
+    void loadInitialQuote();
+
+    return () => controller.abort();
   }, []);
 
-  const portfolio = useMemo(() => calculatePortfolio(state), [state]);
+  async function loadQuote(symbol = symbolQuery) {
+    const normalized = symbol.trim().toUpperCase();
 
-  function addDeposit() {
-    const amount = Number(depositForm.amount);
-
-    if (!amount || amount <= 0) {
+    if (!normalized) {
       return;
     }
 
-    const entry: LedgerEntry = {
-      id: crypto.randomUUID(),
-      date: depositForm.date,
-      type: "deposit",
-      amount,
-      source: depositForm.source || "Deposit",
-      notes: depositForm.notes,
-    };
+    setIsLoadingQuote(true);
+    setQuoteState({});
 
-    setState((current) => ({
-      ...current,
-      ledger: [entry, ...current.ledger],
-      auditLog: [
-        auditEvent("ledger", entry.id, "ledger_posted", `Posted deposit of ${currency(amount)} from ${entry.source}.`),
-        ...current.auditLog,
-      ],
-    }));
+    try {
+      const response = await fetch(`/api/market-data/quote?symbol=${encodeURIComponent(normalized)}`);
+      const payload = (await response.json()) as QuoteResponse;
+      setQuoteState(payload);
+      setSymbolQuery(normalized);
+    } catch {
+      setQuoteState({ error: "Unable to reach the market-data route.", code: "NETWORK_ERROR" });
+    } finally {
+      setIsLoadingQuote(false);
+    }
   }
 
-  function addTrade() {
-    const trade: Trade = {
-      id: crypto.randomUUID(),
-      ticker: tradeForm.ticker.toUpperCase(),
-      assetType: tradeForm.assetType,
-      action: tradeForm.action,
-      quantity: Number(tradeForm.quantity),
-      entryPrice: Number(tradeForm.entryPrice),
-      openedAt: tradeForm.openedAt,
-      thesis: tradeForm.thesis || "No thesis recorded.",
-      strategy: tradeForm.strategy || "Manual trade",
-      riskAmount: Number(tradeForm.riskAmount),
-      target: Number(tradeForm.target),
-      stopLoss: Number(tradeForm.stopLoss),
-      notes: tradeForm.notes,
-      status: "open",
-      underlyingTicker: tradeForm.assetType === "option" ? tradeForm.underlyingTicker.toUpperCase() : undefined,
-      optionType: tradeForm.assetType === "option" ? tradeForm.optionType : undefined,
-      strike: numberOrUndefined(tradeForm.strike),
-      expirationDate: tradeForm.assetType === "option" ? tradeForm.expirationDate : undefined,
-      premium: numberOrUndefined(tradeForm.premium),
-      contracts: numberOrUndefined(tradeForm.contracts),
-      strategyTag: tradeForm.strategyTag || undefined,
-      maxLoss: numberOrUndefined(tradeForm.maxLoss),
-      maxProfit: numberOrUndefined(tradeForm.maxProfit),
-      greeks: tradeForm.assetType === "option" ? {} : undefined,
-    };
+  async function searchSymbols() {
+    const query = symbolQuery.trim();
 
-    if (!trade.ticker || !trade.quantity || !trade.entryPrice) {
+    if (!query) {
+      setSearchResults([]);
       return;
     }
 
-    const ledgerEntry = ledgerEntryForTrade(trade);
+    setIsSearching(true);
 
-    setState((current) => ({
-      ...current,
-      trades: [trade, ...current.trades],
-      ledger: [ledgerEntry, ...current.ledger],
-      auditLog: [
-        auditEvent("trade", trade.id, "created", `Opened ${trade.action} ${trade.quantity} ${trade.ticker} at ${currency(trade.entryPrice)}.`),
-        auditEvent("ledger", ledgerEntry.id, "ledger_posted", `Posted ${ledgerEntry.source} cash ledger movement.`),
-        ...current.auditLog,
-      ],
-    }));
-    setTradeForm(emptyTradeForm);
-  }
-
-  function closeTrade(trade: Trade) {
-    const exitPrice = Number(closePrices[trade.id]);
-
-    if (!exitPrice || trade.status === "closed") {
-      return;
+    try {
+      const response = await fetch(`/api/market-data/search?q=${encodeURIComponent(query)}`);
+      const payload = (await response.json()) as { results?: SearchResult[] };
+      setSearchResults(payload.results ?? []);
+    } catch {
+      setSearchResults([]);
+    } finally {
+      setIsSearching(false);
     }
-
-    const closedTrade: Trade = {
-      ...trade,
-      exitPrice,
-      closedAt: new Date().toISOString().slice(0, 10),
-      status: "closed",
-    };
-    const closeLedgerEntry = ledgerEntryForClosedTrade(closedTrade);
-
-    setState((current) => ({
-      ...current,
-      trades: current.trades.map((item) => (item.id === trade.id ? closedTrade : item)),
-      ledger: closeLedgerEntry ? [closeLedgerEntry, ...current.ledger] : current.ledger,
-      auditLog: [
-        auditEvent(
-          "trade",
-          trade.id,
-          "closed",
-          `Closed ${trade.ticker} at ${currency(exitPrice)} for realized P/L ${currency(getTradePnL(closedTrade))}.`,
-        ),
-        ...current.auditLog,
-      ],
-    }));
-  }
-
-  function resetDemo() {
-    setState(initialState);
-    window.localStorage.removeItem(storageKey);
   }
 
   return (
-    <main className="min-h-screen bg-background">
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-6 sm:px-6 lg:px-8">
-        <header className="flex flex-col gap-5 border-b pb-6 lg:flex-row lg:items-end lg:justify-between">
-          <div className="flex flex-col gap-3">
-            <div className="flex items-center gap-3">
-              <div className="flex size-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                <LineChart />
-              </div>
-              <div>
-                <p className="text-sm text-muted-foreground">Paper brokerage ledger</p>
-                <h1 className="text-3xl font-semibold tracking-tight">Proof Portfolio</h1>
-              </div>
+    <main className="min-h-screen overflow-x-hidden bg-[#080b0f] text-[#e8edf2]">
+      <div className="grid min-h-screen lg:grid-cols-[232px_1fr]">
+        <aside className="hidden border-r border-white/8 bg-[#0b0f14] lg:block">
+          <div className="flex h-16 items-center gap-3 border-b border-white/8 px-5">
+            <div className="flex size-9 items-center justify-center rounded-md border border-emerald-400/30 bg-emerald-400/10 text-emerald-300">
+              <ShieldCheck className="size-4" />
             </div>
-            <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-              Track fake deposits, manual stock and option trades, cash movements, realized results, and deposit-adjusted performance using a swappable market data service.
-            </p>
+            <div>
+              <p className="text-sm font-semibold tracking-tight">Proof Portfolio</p>
+              <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Paper terminal</p>
+            </div>
           </div>
-          <Button variant="outline" onClick={resetDemo}>
-            Reset demo data
-          </Button>
-        </header>
+          <nav className="space-y-1 px-3 py-4">
+            {navItems.map(([label, Icon]) => (
+              <button
+                key={label}
+                className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition ${
+                  activeSection === label
+                    ? "bg-slate-800/80 text-white"
+                    : "text-slate-400 hover:bg-slate-900 hover:text-slate-100"
+                }`}
+                onClick={() => setActiveSection(label)}
+              >
+                <Icon className="size-4" />
+                {label}
+              </button>
+            ))}
+          </nav>
+        </aside>
 
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <MetricCard title="Cash balance" value={currency(portfolio.cashBalance)} icon={<Wallet />} />
-          <MetricCard title="Portfolio value" value={currency(portfolio.totalPortfolioValue)} icon={<Landmark />} />
-          <MetricCard
-            title="Trading return"
-            value={currency(portfolio.tradingReturnExcludingDeposits)}
-            description="Excludes net deposits and withdrawals"
-            icon={<Activity />}
+        <section className="min-w-0">
+          <TopCommandBar
+            symbolQuery={symbolQuery}
+            setSymbolQuery={setSymbolQuery}
+            quoteState={quoteState}
+            isLoadingQuote={isLoadingQuote}
+            onQuote={() => loadQuote()}
+            onSearch={searchSymbols}
           />
-          <MetricCard
-            title="Account growth"
-            value={percent(portfolio.accountGrowthIncludingDeposits)}
-            description="Return on contributed paper capital"
-            icon={<ShieldCheck />}
-          />
+
+          <div className="grid min-w-0 gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+            <div className="min-w-0 space-y-4">
+              <MobileNav activeSection={activeSection} setActiveSection={setActiveSection} />
+              <Overview summary={summary} range={range} setRange={setRange} />
+              <div className="grid gap-4 xl:grid-cols-[1.3fr_0.9fr]">
+                <RecentTrades />
+                <CashLedgerPreview />
+              </div>
+            </div>
+
+            <aside className="min-w-0 space-y-4">
+              <MarketPanel
+                symbolQuery={symbolQuery}
+                setSymbolQuery={setSymbolQuery}
+                quoteState={quoteState}
+                searchResults={searchResults}
+                isLoadingQuote={isLoadingQuote}
+                isSearching={isSearching}
+                onQuote={loadQuote}
+                onSearch={searchSymbols}
+              />
+              <DepositPanel depositDraft={depositDraft} setDepositDraft={setDepositDraft} />
+              <ProofScorecard />
+            </aside>
+          </div>
         </section>
-
-        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(String(value))} className="gap-5">
-          <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1">
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="ledger">Cash ledger</TabsTrigger>
-            <TabsTrigger value="portfolio">Portfolio</TabsTrigger>
-            <TabsTrigger value="ticket">Trade ticket</TabsTrigger>
-            <TabsTrigger value="journal">Trade journal</TabsTrigger>
-            <TabsTrigger value="report">Performance report</TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="overview" className="flex flex-col gap-5">
-            <div className="grid gap-5 xl:grid-cols-[1.7fr_1fr]">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Equity curve</CardTitle>
-                  <CardDescription>Portfolio value versus cumulative deposits.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="h-80 overflow-x-auto">
-                    {chartsReady && activeTab === "overview" ? (
-                      <AreaChart width={900} height={300} data={portfolio.equityCurve}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="date" />
-                        <YAxis tickFormatter={(value) => `$${Number(value) / 1000}k`} />
-                        <Tooltip formatter={(value) => currency(Number(value))} />
-                        <Area dataKey="totalDeposits" name="Deposits" stroke="var(--chart-2)" fill="var(--chart-1)" />
-                        <Area dataKey="totalValue" name="Total value" stroke="var(--foreground)" fill="var(--chart-2)" />
-                      </AreaChart>
-                    ) : (
-                      <ChartFallback />
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-              <DepositCard form={depositForm} setForm={setDepositForm} onAdd={addDeposit} />
-            </div>
-
-            <div className="grid gap-5 lg:grid-cols-3">
-              <StatPanel label="Realized P/L" value={currency(portfolio.realizedPnL)} />
-              <StatPanel label="Unrealized P/L" value={currency(portfolio.unrealizedPnL)} />
-              <StatPanel label="Total deposits" value={currency(portfolio.totalDeposits)} />
-            </div>
-          </TabsContent>
-
-          <TabsContent value="ledger">
-            <Card>
-              <CardHeader>
-                <CardTitle>Cash ledger</CardTitle>
-                <CardDescription>Every deposit, withdrawal, trade debit, trade credit, option premium, and fee placeholder posts here.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <LedgerTable entries={state.ledger} />
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="portfolio">
-            <Card>
-              <CardHeader>
-                <CardTitle>Open positions</CardTitle>
-                <CardDescription>Mock quotes are supplied by the market data abstraction in <code>src/domain/market-data.ts</code>.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <PositionsTable positions={portfolio.openPositions} />
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="ticket">
-            <TradeTicket form={tradeForm} setForm={setTradeForm} onAdd={addTrade} />
-          </TabsContent>
-
-          <TabsContent value="journal" className="flex flex-col gap-5">
-            <Card>
-              <CardHeader>
-                <CardTitle>Trade journal</CardTitle>
-                <CardDescription>Closed trades are not editable in the MVP. Closing creates an audit event and cash ledger posting.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <TradeJournal trades={state.trades} closePrices={closePrices} setClosePrices={setClosePrices} closeTrade={closeTrade} />
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Audit log</CardTitle>
-                <CardDescription>Append-only proof trail for posted cash movements and closed trades.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <AuditLog state={state} />
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="report" className="grid gap-5 xl:grid-cols-[1.4fr_1fr]">
-            <Card>
-              <CardHeader>
-                <CardTitle>Monthly performance</CardTitle>
-                <CardDescription>Trading return stays separated from deposit-driven account growth.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="h-80 overflow-x-auto">
-                  {chartsReady && activeTab === "report" ? (
-                    <BarChart width={760} height={300} data={portfolio.monthlyPerformance}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="month" />
-                      <YAxis />
-                      <Tooltip formatter={(value, name) => (name === "accountGrowth" ? percent(Number(value)) : currency(Number(value)))} />
-                      <Bar dataKey="tradingReturn" name="Trading return" fill="var(--foreground)" />
-                      <Bar dataKey="accountGrowth" name="Account growth %" fill="var(--chart-2)" />
-                    </BarChart>
-                  ) : (
-                    <ChartFallback />
-                  )}
-                  </div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader>
-                <CardTitle>Proof metrics</CardTitle>
-                <CardDescription>Calculated from closed trades and the equity curve.</CardDescription>
-              </CardHeader>
-              <CardContent className="grid gap-4">
-                <StatPanel label="Win rate" value={percent(portfolio.winRate)} />
-                <StatPanel label="Average win" value={currency(portfolio.averageWin)} />
-                <StatPanel label="Average loss" value={currency(portfolio.averageLoss)} />
-                <StatPanel label="Max drawdown" value={percent(-portfolio.maxDrawdown)} />
-                <Separator />
-                <StatPanel label="Best trade" value={portfolio.bestTrade ? `${portfolio.bestTrade.ticker} ${currency(getTradePnL(portfolio.bestTrade))}` : "None"} />
-                <StatPanel label="Worst trade" value={portfolio.worstTrade ? `${portfolio.worstTrade.ticker} ${currency(getTradePnL(portfolio.worstTrade))}` : "None"} />
-              </CardContent>
-            </Card>
-          </TabsContent>
-        </Tabs>
       </div>
     </main>
   );
 }
 
-function MetricCard({
-  title,
-  value,
-  description,
-  icon,
+function TopCommandBar({
+  symbolQuery,
+  setSymbolQuery,
+  quoteState,
+  isLoadingQuote,
+  onQuote,
+  onSearch,
 }: {
-  title: string;
-  value: string;
-  description?: string;
-  icon: React.ReactNode;
+  symbolQuery: string;
+  setSymbolQuery: (value: string) => void;
+  quoteState: QuoteResponse;
+  isLoadingQuote: boolean;
+  onQuote: () => void;
+  onSearch: () => void;
 }) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{title}</CardTitle>
-        <CardAction className="text-muted-foreground">{icon}</CardAction>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-1">
-        <p className="text-2xl font-semibold tracking-tight">{value}</p>
-        {description ? <p className="text-sm text-muted-foreground">{description}</p> : null}
-      </CardContent>
-    </Card>
-  );
-}
-
-function DepositCard({
-  form,
-  setForm,
-  onAdd,
-}: {
-  form: { amount: string; date: string; source: string; notes: string };
-  setForm: React.Dispatch<React.SetStateAction<{ amount: string; date: string; source: string; notes: string }>>;
-  onAdd: () => void;
-}) {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Add fake deposit</CardTitle>
-        <CardDescription>Deposits increase cash but never count as trading profit.</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <FieldGroup>
-          <Field>
-            <FieldLabel htmlFor="deposit-amount">Amount</FieldLabel>
-            <Input id="deposit-amount" type="number" value={form.amount} onChange={(event) => setForm((current) => ({ ...current, amount: event.target.value }))} />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="deposit-date">Date</FieldLabel>
-            <Input id="deposit-date" type="date" value={form.date} onChange={(event) => setForm((current) => ({ ...current, date: event.target.value }))} />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="deposit-source">Source label</FieldLabel>
-            <Input id="deposit-source" value={form.source} onChange={(event) => setForm((current) => ({ ...current, source: event.target.value }))} />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="deposit-notes">Notes</FieldLabel>
-            <Textarea id="deposit-notes" value={form.notes} onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))} />
-          </Field>
-          <Button onClick={onAdd}>
-            <Plus data-icon="inline-start" />
-            Post deposit
+    <header className="sticky top-0 z-10 flex min-h-16 flex-col gap-3 border-b border-white/8 bg-[#0a0e13]/95 px-4 py-3 backdrop-blur md:flex-row md:items-center md:justify-between">
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        <div className="flex min-w-0 flex-1 items-center rounded-md border border-white/10 bg-[#111820] px-3">
+          <Search className="size-4 text-slate-500" />
+          <input
+            className="h-9 min-w-0 flex-1 bg-transparent px-3 text-sm text-slate-100 outline-none placeholder:text-slate-600"
+            value={symbolQuery}
+            placeholder="Search symbol"
+            onChange={(event) => setSymbolQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                onQuote();
+                onSearch();
+              }
+            }}
+          />
+          <Button size="sm" variant="secondary" onClick={onQuote} disabled={isLoadingQuote}>
+            {isLoadingQuote ? <Loader2 className="size-3.5 animate-spin" /> : "Quote"}
           </Button>
-        </FieldGroup>
-      </CardContent>
-    </Card>
-  );
-}
-
-function TradeTicket({
-  form,
-  setForm,
-  onAdd,
-}: {
-  form: TradeForm;
-  setForm: React.Dispatch<React.SetStateAction<TradeForm>>;
-  onAdd: () => void;
-}) {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Trade ticket</CardTitle>
-        <CardDescription>Manual stock trades are active in the MVP; option fields are modeled for the next execution layer.</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <FieldGroup className="grid gap-5 lg:grid-cols-3">
-          <Field>
-            <FieldLabel htmlFor="ticker">Ticker</FieldLabel>
-            <Input id="ticker" value={form.ticker} onChange={(event) => setForm((current) => ({ ...current, ticker: event.target.value }))} />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="asset-type">Asset type</FieldLabel>
-            <select id="asset-type" className="h-9 rounded-lg border border-input bg-background px-3 text-sm" value={form.assetType} onChange={(event) => setForm((current) => ({ ...current, assetType: event.target.value as AssetType }))}>
-              <option value="stock">Stock</option>
-              <option value="option">Option</option>
-            </select>
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="action">Action</FieldLabel>
-            <select id="action" className="h-9 rounded-lg border border-input bg-background px-3 text-sm" value={form.action} onChange={(event) => setForm((current) => ({ ...current, action: event.target.value as "buy" | "sell" }))}>
-              <option value="buy">Buy</option>
-              <option value="sell">Sell</option>
-            </select>
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="quantity">Quantity</FieldLabel>
-            <Input id="quantity" type="number" value={form.quantity} onChange={(event) => setForm((current) => ({ ...current, quantity: event.target.value }))} />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="entry-price">Entry price</FieldLabel>
-            <Input id="entry-price" type="number" value={form.entryPrice} onChange={(event) => setForm((current) => ({ ...current, entryPrice: event.target.value }))} />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="opened-at">Date</FieldLabel>
-            <Input id="opened-at" type="date" value={form.openedAt} onChange={(event) => setForm((current) => ({ ...current, openedAt: event.target.value }))} />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="risk">Risk amount</FieldLabel>
-            <Input id="risk" type="number" value={form.riskAmount} onChange={(event) => setForm((current) => ({ ...current, riskAmount: event.target.value }))} />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="target">Target</FieldLabel>
-            <Input id="target" type="number" value={form.target} onChange={(event) => setForm((current) => ({ ...current, target: event.target.value }))} />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="stop-loss">Stop loss</FieldLabel>
-            <Input id="stop-loss" type="number" value={form.stopLoss} onChange={(event) => setForm((current) => ({ ...current, stopLoss: event.target.value }))} />
-          </Field>
-          <Field className="lg:col-span-3">
-            <FieldLabel htmlFor="thesis">Thesis</FieldLabel>
-            <Textarea id="thesis" value={form.thesis} onChange={(event) => setForm((current) => ({ ...current, thesis: event.target.value }))} />
-          </Field>
-          <Field className="lg:col-span-2">
-            <FieldLabel htmlFor="strategy">Strategy</FieldLabel>
-            <Input id="strategy" value={form.strategy} onChange={(event) => setForm((current) => ({ ...current, strategy: event.target.value }))} />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="notes">Notes</FieldLabel>
-            <Input id="notes" value={form.notes} onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))} />
-          </Field>
-          {form.assetType === "option" ? <OptionFields form={form} setForm={setForm} /> : null}
-          <Field className="lg:col-span-3">
-            <FieldDescription>Posting a ticket immediately writes a matching cash ledger debit or credit. Fees are represented in the schema and ledger type set for future brokerage simulation.</FieldDescription>
-            <Button onClick={onAdd}>Post trade</Button>
-          </Field>
-        </FieldGroup>
-      </CardContent>
-    </Card>
-  );
-}
-
-function OptionFields({ form, setForm }: { form: TradeForm; setForm: React.Dispatch<React.SetStateAction<TradeForm>> }) {
-  return (
-    <>
-      <Field>
-        <FieldLabel htmlFor="underlying">Underlying ticker</FieldLabel>
-        <Input id="underlying" value={form.underlyingTicker} onChange={(event) => setForm((current) => ({ ...current, underlyingTicker: event.target.value }))} />
-      </Field>
-      <Field>
-        <FieldLabel htmlFor="option-type">Call/put</FieldLabel>
-        <select id="option-type" className="h-9 rounded-lg border border-input bg-background px-3 text-sm" value={form.optionType} onChange={(event) => setForm((current) => ({ ...current, optionType: event.target.value as "call" | "put" }))}>
-          <option value="call">Call</option>
-          <option value="put">Put</option>
-        </select>
-      </Field>
-      <Field>
-        <FieldLabel htmlFor="strike">Strike</FieldLabel>
-        <Input id="strike" type="number" value={form.strike} onChange={(event) => setForm((current) => ({ ...current, strike: event.target.value }))} />
-      </Field>
-      <Field>
-        <FieldLabel htmlFor="expiration">Expiration</FieldLabel>
-        <Input id="expiration" type="date" value={form.expirationDate} onChange={(event) => setForm((current) => ({ ...current, expirationDate: event.target.value }))} />
-      </Field>
-      <Field>
-        <FieldLabel htmlFor="premium">Premium</FieldLabel>
-        <Input id="premium" type="number" value={form.premium} onChange={(event) => setForm((current) => ({ ...current, premium: event.target.value }))} />
-      </Field>
-      <Field>
-        <FieldLabel htmlFor="contracts">Contracts</FieldLabel>
-        <Input id="contracts" type="number" value={form.contracts} onChange={(event) => setForm((current) => ({ ...current, contracts: event.target.value }))} />
-      </Field>
-      <Field>
-        <FieldLabel htmlFor="strategy-tag">Strategy tag</FieldLabel>
-        <Input id="strategy-tag" value={form.strategyTag} onChange={(event) => setForm((current) => ({ ...current, strategyTag: event.target.value }))} />
-      </Field>
-      <Field>
-        <FieldLabel htmlFor="max-loss">Max loss</FieldLabel>
-        <Input id="max-loss" type="number" value={form.maxLoss} onChange={(event) => setForm((current) => ({ ...current, maxLoss: event.target.value }))} />
-      </Field>
-      <Field>
-        <FieldLabel htmlFor="max-profit">Max profit placeholder</FieldLabel>
-        <Input id="max-profit" type="number" value={form.maxProfit} onChange={(event) => setForm((current) => ({ ...current, maxProfit: event.target.value }))} />
-      </Field>
-    </>
-  );
-}
-
-function LedgerTable({ entries }: { entries: LedgerEntry[] }) {
-  return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Date</TableHead>
-          <TableHead>Type</TableHead>
-          <TableHead>Source</TableHead>
-          <TableHead className="text-right">Amount</TableHead>
-          <TableHead>Notes</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {entries.toSorted((a, b) => b.date.localeCompare(a.date)).map((entry) => (
-          <TableRow key={entry.id}>
-            <TableCell>{entry.date}</TableCell>
-            <TableCell><Badge variant="secondary">{entry.type}</Badge></TableCell>
-            <TableCell>{entry.source}</TableCell>
-            <TableCell className="text-right font-medium">{currency(entry.amount)}</TableCell>
-            <TableCell className="text-muted-foreground">{entry.notes || "-"}</TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
-  );
-}
-
-function PositionsTable({ positions }: { positions: ReturnType<typeof calculatePortfolio>["openPositions"] }) {
-  if (!positions.length) {
-    return <p className="text-sm text-muted-foreground">No open positions yet.</p>;
-  }
-
-  return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Ticker</TableHead>
-          <TableHead>Type</TableHead>
-          <TableHead className="text-right">Qty</TableHead>
-          <TableHead className="text-right">Avg cost</TableHead>
-          <TableHead className="text-right">Mock price</TableHead>
-          <TableHead className="text-right">Market value</TableHead>
-          <TableHead className="text-right">Unrealized P/L</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {positions.map((position) => (
-          <TableRow key={`${position.assetType}-${position.ticker}`}>
-            <TableCell className="font-medium">{position.ticker}</TableCell>
-            <TableCell>{position.assetType}</TableCell>
-            <TableCell className="text-right">{position.quantity}</TableCell>
-            <TableCell className="text-right">{currency(position.averageCost)}</TableCell>
-            <TableCell className="text-right">{currency(position.marketPrice)}</TableCell>
-            <TableCell className="text-right">{currency(position.marketValue)}</TableCell>
-            <TableCell className="text-right">{currency(position.unrealizedPnL)}</TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
-  );
-}
-
-function TradeJournal({
-  trades,
-  closePrices,
-  setClosePrices,
-  closeTrade,
-}: {
-  trades: Trade[];
-  closePrices: Record<string, string>;
-  setClosePrices: React.Dispatch<React.SetStateAction<Record<string, string>>>;
-  closeTrade: (trade: Trade) => void;
-}) {
-  return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Ticker</TableHead>
-          <TableHead>Status</TableHead>
-          <TableHead>Action</TableHead>
-          <TableHead className="text-right">Qty</TableHead>
-          <TableHead className="text-right">Entry</TableHead>
-          <TableHead className="text-right">Exit</TableHead>
-          <TableHead>Strategy</TableHead>
-          <TableHead>Thesis</TableHead>
-          <TableHead>Close</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {trades.map((trade) => (
-          <TableRow key={trade.id}>
-            <TableCell className="font-medium">{trade.ticker}</TableCell>
-            <TableCell><Badge variant={trade.status === "open" ? "default" : "secondary"}>{trade.status}</Badge></TableCell>
-            <TableCell>{trade.action}</TableCell>
-            <TableCell className="text-right">{trade.quantity}</TableCell>
-            <TableCell className="text-right">{currency(trade.entryPrice)}</TableCell>
-            <TableCell className="text-right">{trade.exitPrice ? currency(trade.exitPrice) : "-"}</TableCell>
-            <TableCell>{trade.strategy}</TableCell>
-            <TableCell className="max-w-64 text-muted-foreground">{trade.thesis}</TableCell>
-            <TableCell>
-              {trade.status === "open" ? (
-                <div className="flex min-w-44 items-center gap-2">
-                  <Input
-                    aria-label={`Exit price for ${trade.ticker}`}
-                    type="number"
-                    placeholder="Exit"
-                    value={closePrices[trade.id] ?? ""}
-                    onChange={(event) => setClosePrices((current) => ({ ...current, [trade.id]: event.target.value }))}
-                  />
-                  <Button variant="outline" onClick={() => closeTrade(trade)}>Close</Button>
-                </div>
-              ) : (
-                <span className="text-sm text-muted-foreground">Locked</span>
-              )}
-            </TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
-  );
-}
-
-function AuditLog({ state }: { state: ProofPortfolioState }) {
-  return (
-    <div className="flex flex-col gap-3">
-      {state.auditLog.map((event) => (
-        <div key={event.id} className="flex items-start gap-3 rounded-lg border p-3">
-          <BookOpen className="mt-0.5 text-muted-foreground" />
-          <div className="flex flex-col gap-1">
-            <p className="text-sm font-medium">{event.summary}</p>
-            <p className="text-xs text-muted-foreground">{event.date} · {event.entityType} · {event.action}</p>
-          </div>
         </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+        <StatusPill
+          label={
+            quoteState.clock?.isOpen === true
+              ? "Market open"
+              : quoteState.clock?.isOpen === false
+                ? "Market closed"
+                : "Market status unknown"
+          }
+          tone={quoteState.clock?.isOpen ? "positive" : "neutral"}
+        />
+        <StatusPill label={quoteState.quote?.source.label ?? "Alpaca not connected"} tone="neutral" />
+        <span className="font-mono">
+          Last updated {formatTimestamp(quoteState.quote?.source.asOf ?? quoteState.clock?.timestamp ?? null)}
+        </span>
+        <div className="rounded-md border border-white/10 px-2 py-1 text-slate-300">Personal</div>
+      </div>
+    </header>
+  );
+}
+
+function MobileNav({
+  activeSection,
+  setActiveSection,
+}: {
+  activeSection: string;
+  setActiveSection: (value: string) => void;
+}) {
+  return (
+    <div className="flex gap-2 overflow-x-auto lg:hidden">
+      {navItems.map(([label]) => (
+        <button
+          key={label}
+          className={`shrink-0 rounded-md border px-3 py-2 text-xs ${
+            activeSection === label ? "border-slate-500 bg-slate-800 text-white" : "border-white/10 text-slate-400"
+          }`}
+          onClick={() => setActiveSection(label)}
+        >
+          {label}
+        </button>
       ))}
     </div>
   );
 }
 
-function StatPanel({ label, value }: { label: string; value: string }) {
+function Overview({
+  summary,
+  range,
+  setRange,
+}: {
+  summary: ProofPortfolioSummary;
+  range: string;
+  setRange: (value: string) => void;
+}) {
+  const metrics = [
+    ["Total portfolio value", currency(summary.totalPortfolioValue), "neutral"],
+    ["Cash available", currency(summary.cashAvailable), "neutral"],
+    ["Invested market value", currency(summary.investedMarketValue), "neutral"],
+    ["Today's P/L", signedCurrency(summary.todayPnl), valueTone(summary.todayPnl)],
+    ["Total realized P/L", signedCurrency(summary.totalRealizedPnl), valueTone(summary.totalRealizedPnl)],
+    ["Total unrealized P/L", signedCurrency(summary.totalUnrealizedPnl), valueTone(summary.totalUnrealizedPnl)],
+    ["Net contributions", currency(summary.netContributions), "neutral"],
+    ["Trading return excl. deposits", signedCurrency(summary.tradingReturnExcludingDeposits), valueTone(summary.tradingReturnExcludingDeposits)],
+    ["Time-weighted return", percent(summary.timeWeightedReturn), valueTone(summary.timeWeightedReturn)],
+    ["Benchmark vs SPY", percent(summary.benchmarkReturn), valueTone(summary.benchmarkReturn)],
+  ] as const;
+
   return (
-    <div className="rounded-lg border bg-card p-4">
-      <p className="text-sm text-muted-foreground">{label}</p>
-      <p className="mt-1 text-xl font-semibold tracking-tight">{value}</p>
+    <section className="min-w-0 overflow-hidden rounded-lg border border-white/10 bg-[#0d131a]">
+      <div className="flex flex-col gap-4 border-b border-white/8 p-4 md:flex-row md:items-start md:justify-between">
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight text-white">Overview</h1>
+          <p className="mt-1 max-w-2xl text-wrap text-sm text-slate-400">
+            Proof screen separating external cash flows from market results. No seeded positions, fake prices, or fabricated
+            performance metrics are shown.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 rounded-md border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-xs text-amber-200">
+          <CalendarClock className="size-4" />
+          Awaiting first portfolio snapshot
+        </div>
+      </div>
+
+      <div className="grid gap-px bg-white/8 md:grid-cols-2 xl:grid-cols-5">
+        {metrics.map(([label, value, tone]) => (
+          <MetricCell key={label} label={label} value={value} tone={tone} />
+        ))}
+      </div>
+
+      <div className="grid min-w-0 gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_280px]">
+        <div className="rounded-md border border-white/10 bg-[#090d12] p-4">
+          <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="text-sm font-medium text-white">Equity curve</h2>
+              <p className="text-xs text-slate-500">Portfolio value, net contributed capital, and SPY comparison.</p>
+            </div>
+            <div className="flex gap-1">
+              {rangeOptions.map((option) => (
+                <button
+                  key={option}
+                  className={`rounded px-2 py-1 font-mono text-[11px] ${
+                    range === option ? "bg-slate-700 text-white" : "text-slate-500 hover:bg-slate-900"
+                  }`}
+                  onClick={() => setRange(option)}
+                >
+                  {option}
+                </button>
+              ))}
+            </div>
+          </div>
+          <EmptyChart />
+        </div>
+
+        <div className="rounded-md border border-white/10 bg-[#090d12] p-4">
+          <h2 className="text-sm font-medium text-white">Data quality</h2>
+          <div className="mt-4 space-y-3 text-xs text-slate-400">
+            <QualityRow label="Stock quotes" value="Alpaca IEX when configured" />
+            <QualityRow label="Options" value="Empty until feed enabled" />
+            <QualityRow label="Performance" value="Stored snapshots only" />
+            <QualityRow label="External flows" value="Cash ledger, not P/L" />
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function MarketPanel({
+  symbolQuery,
+  setSymbolQuery,
+  quoteState,
+  searchResults,
+  isLoadingQuote,
+  isSearching,
+  onQuote,
+  onSearch,
+}: {
+  symbolQuery: string;
+  setSymbolQuery: (value: string) => void;
+  quoteState: QuoteResponse;
+  searchResults: SearchResult[];
+  isLoadingQuote: boolean;
+  isSearching: boolean;
+  onQuote: (symbol?: string) => void;
+  onSearch: () => void;
+}) {
+  const quote = quoteState.quote;
+
+  return (
+    <section className="rounded-lg border border-white/10 bg-[#0d131a] p-4">
+      <div className="mb-4 flex items-center justify-between">
+        <div>
+          <h2 className="text-sm font-semibold text-white">Markets</h2>
+          <p className="text-xs text-slate-500">Real provider responses only</p>
+        </div>
+        <Badge variant="outline" className="border-slate-700 text-slate-300">
+          {quote?.source.label ?? "No feed"}
+        </Badge>
+      </div>
+
+      <div className="flex gap-2">
+        <Input
+          className="border-white/10 bg-[#090d12] text-slate-100"
+          value={symbolQuery}
+          onChange={(event) => setSymbolQuery(event.target.value.toUpperCase())}
+          placeholder="AAPL"
+        />
+        <Button variant="secondary" onClick={() => onQuote()} disabled={isLoadingQuote}>
+          {isLoadingQuote ? <Loader2 className="size-4 animate-spin" /> : "Fetch"}
+        </Button>
+        <Button variant="outline" onClick={onSearch} disabled={isSearching}>
+          <SlidersHorizontal className="size-4" />
+        </Button>
+      </div>
+
+      {quoteState.error ? (
+        <div className="mt-4 rounded-md border border-amber-400/20 bg-amber-400/5 p-3 text-sm text-amber-100">
+          {quoteState.error}
+        </div>
+      ) : null}
+
+      {quote ? (
+        <div className="mt-4 space-y-4">
+          <div className="flex items-end justify-between">
+            <div>
+              <p className="text-xs text-slate-500">{quote.symbol}</p>
+              <p className="font-mono text-3xl font-semibold text-white">{nullableCurrency(quote.mark)}</p>
+            </div>
+            <p className={`font-mono text-sm ${valueClass(quote.dayChange ?? 0)}`}>
+              {quote.dayChange === null ? "No day change" : `${signedCurrency(quote.dayChange)} (${percent(quote.dayChangePercent ?? 0)})`}
+            </p>
+          </div>
+          <div className="grid grid-cols-2 gap-px overflow-hidden rounded-md border border-white/10 bg-white/8">
+            <QuoteCell label="Bid" value={nullableCurrency(quote.bid)} />
+            <QuoteCell label="Ask" value={nullableCurrency(quote.ask)} />
+            <QuoteCell label="Day range" value={`${nullableCurrency(quote.dayLow)} - ${nullableCurrency(quote.dayHigh)}`} />
+            <QuoteCell label="Volume" value={quote.volume === null ? "Unavailable" : quote.volume.toLocaleString()} />
+          </div>
+          <p className="flex items-center gap-2 text-xs text-slate-500">
+            <Clock3 className="size-3.5" />
+            Last updated {formatTimestamp(quote.source.asOf)}
+          </p>
+        </div>
+      ) : (
+        <div className="mt-4 rounded-md border border-dashed border-white/10 p-4 text-sm text-slate-500">
+          Fetch a ticker to show real bid, ask, mark, source, and timestamp. Mock quotes are not substituted.
+        </div>
+      )}
+
+      {searchResults.length ? (
+        <div className="mt-4 space-y-2">
+          <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Search results</p>
+          {searchResults.map((result) => (
+            <button
+              key={result.symbol}
+              className="w-full rounded-md border border-white/10 p-3 text-left hover:bg-slate-900"
+              onClick={() => onQuote(result.symbol)}
+            >
+              <span className="font-mono text-sm text-white">{result.symbol}</span>
+              <span className="ml-2 text-xs text-slate-500">{result.exchange ?? result.assetType}</span>
+              <p className="mt-1 truncate text-xs text-slate-400">{result.name}</p>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function DepositPanel({
+  depositDraft,
+  setDepositDraft,
+}: {
+  depositDraft: {
+    amount: string;
+    date: string;
+    category: string;
+    sourceLabel: string;
+    notes: string;
+  };
+  setDepositDraft: React.Dispatch<
+    React.SetStateAction<{
+      amount: string;
+      date: string;
+      category: string;
+      sourceLabel: string;
+      notes: string;
+    }>
+  >;
+}) {
+  return (
+    <section className="rounded-lg border border-white/10 bg-[#0d131a] p-4">
+      <div className="mb-4">
+        <h2 className="text-sm font-semibold text-white">Deposits & Cash</h2>
+        <p className="text-xs text-slate-500">External money is tracked separately from performance.</p>
+      </div>
+      <FieldGroup>
+        <Field>
+          <FieldLabel className="text-slate-400">Amount</FieldLabel>
+          <Input
+            className="border-white/10 bg-[#090d12] text-slate-100"
+            inputMode="decimal"
+            value={depositDraft.amount}
+            placeholder="0.00"
+            onChange={(event) => setDepositDraft((current) => ({ ...current, amount: event.target.value }))}
+          />
+        </Field>
+        <Field>
+          <FieldLabel className="text-slate-400">Date</FieldLabel>
+          <Input
+            className="border-white/10 bg-[#090d12] text-slate-100"
+            type="date"
+            value={depositDraft.date}
+            onChange={(event) => setDepositDraft((current) => ({ ...current, date: event.target.value }))}
+          />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field>
+            <FieldLabel className="text-slate-400">Category</FieldLabel>
+            <select
+              className="h-9 rounded-md border border-white/10 bg-[#090d12] px-3 text-sm text-slate-100"
+              value={depositDraft.category}
+              onChange={(event) => setDepositDraft((current) => ({ ...current, category: event.target.value }))}
+            >
+              <option value="paycheck">Paycheck</option>
+              <option value="bonus">Bonus</option>
+              <option value="manual contribution">Manual</option>
+              <option value="correction">Correction</option>
+            </select>
+          </Field>
+          <Field>
+            <FieldLabel className="text-slate-400">Source</FieldLabel>
+            <Input
+              className="border-white/10 bg-[#090d12] text-slate-100"
+              value={depositDraft.sourceLabel}
+              placeholder="Employer"
+              onChange={(event) => setDepositDraft((current) => ({ ...current, sourceLabel: event.target.value }))}
+            />
+          </Field>
+        </div>
+        <Field>
+          <FieldLabel className="text-slate-400">Notes</FieldLabel>
+          <Textarea
+            className="min-h-20 border-white/10 bg-[#090d12] text-slate-100"
+            value={depositDraft.notes}
+            onChange={(event) => setDepositDraft((current) => ({ ...current, notes: event.target.value }))}
+          />
+        </Field>
+        <Button disabled variant="secondary" className="w-full opacity-60">
+          Connect Supabase auth to post deposit
+        </Button>
+        <p className="text-xs leading-5 text-slate-500">
+          The database and RLS foundation is in place. Posting is disabled until an authenticated Supabase account context is
+          available, so drafts are not silently stored in localStorage.
+        </p>
+      </FieldGroup>
+    </section>
+  );
+}
+
+function ProofScorecard() {
+  const rows = [
+    ["Win rate", "No closed trades"],
+    ["Average win", "No closed trades"],
+    ["Average loss", "No closed trades"],
+    ["Profit factor", "No closed trades"],
+    ["Max drawdown", "No snapshots"],
+    ["Average holding period", "No closed trades"],
+  ];
+
+  return (
+    <section className="rounded-lg border border-white/10 bg-[#0d131a] p-4">
+      <h2 className="text-sm font-semibold text-white">Proof scorecard</h2>
+      <div className="mt-4 space-y-3">
+        {rows.map(([label, value]) => (
+          <QualityRow key={label} label={label} value={value} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function RecentTrades() {
+  return (
+    <section className="rounded-lg border border-white/10 bg-[#0d131a]">
+      <div className="border-b border-white/8 p-4">
+        <h2 className="text-sm font-semibold text-white">Recent trades</h2>
+        <p className="text-xs text-slate-500">Closed trades will be immutable and corrected through adjustment events.</p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[680px] text-sm">
+          <thead className="bg-[#090d12] text-xs text-slate-500">
+            <tr>
+              {["Time", "Symbol", "Type", "Side", "Qty", "Fill", "Thesis", "Status"].map((head) => (
+                <th key={head} className="px-4 py-3 text-left font-medium">
+                  {head}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td colSpan={8} className="px-4 py-10 text-center text-slate-500">
+                No trades yet. The terminal will only show orders filled from stored quote timestamps and bid/ask data.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function CashLedgerPreview() {
+  return (
+    <section className="rounded-lg border border-white/10 bg-[#0d131a]">
+      <div className="border-b border-white/8 p-4">
+        <h2 className="text-sm font-semibold text-white">Cash-flow timeline</h2>
+        <p className="text-xs text-slate-500">Deposits, withdrawals, fees, dividends, and trade credits/debits.</p>
+      </div>
+      <div className="flex h-56 items-center justify-center p-4 text-center text-sm text-slate-500">
+        No ledger entries yet. Add authenticated cash flows to build contribution and TWR history.
+      </div>
+    </section>
+  );
+}
+
+function MetricCell({ label, value, tone }: { label: string; value: string; tone: string }) {
+  return (
+    <div className="bg-[#0d131a] p-4">
+      <p className="text-xs text-slate-500">{label}</p>
+      <p className={`mt-2 font-mono text-lg font-semibold ${toneClass(tone)}`}>{value}</p>
     </div>
   );
 }
 
-function numberOrUndefined(value: string) {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) && value !== "" ? numeric : undefined;
+function EmptyChart() {
+  return (
+    <div className="relative h-[320px] overflow-hidden rounded-md border border-white/8 bg-[#070a0e]">
+      <div className="absolute inset-0 chart-grid" />
+      <div className="absolute inset-x-6 bottom-10 top-8 flex items-end justify-between opacity-30">
+        {Array.from({ length: 18 }).map((_, index) => (
+          <div key={index} className="h-full w-px bg-slate-800" />
+        ))}
+      </div>
+      <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+        <LineChart className="mb-3 size-9 text-slate-600" />
+        <p className="text-sm font-medium text-slate-300">No stored snapshots</p>
+        <p className="mt-1 max-w-sm text-xs leading-5 text-slate-500">
+          Equity curves unlock after real positions, cash flows, and dated portfolio snapshots exist in Supabase.
+        </p>
+      </div>
+    </div>
+  );
 }
 
-function ChartFallback() {
-  return <div className="flex h-full items-center justify-center rounded-lg border bg-muted text-sm text-muted-foreground">Chart loading</div>;
+function QuoteCell({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="bg-[#0d131a] p-3">
+      <p className="text-xs text-slate-500">{label}</p>
+      <p className="mt-1 font-mono text-sm text-slate-100">{value}</p>
+    </div>
+  );
+}
+
+function QualityRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-start justify-between gap-4">
+      <span className="text-slate-500">{label}</span>
+      <span className="max-w-40 text-right text-slate-300">{value}</span>
+    </div>
+  );
+}
+
+function StatusPill({ label, tone }: { label: string; tone: "positive" | "neutral" }) {
+  return (
+    <span
+      className={`rounded-md border px-2 py-1 ${
+        tone === "positive" ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-300" : "border-white/10 text-slate-300"
+      }`}
+    >
+      {label}
+    </span>
+  );
+}
+
+function nullableCurrency(value: number | null) {
+  return value === null ? "Unavailable" : currency(value);
+}
+
+function formatTimestamp(value: string | null) {
+  if (!value) {
+    return "unavailable";
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    month: "short",
+    day: "numeric",
+  }).format(new Date(value));
+}
+
+function valueTone(value: number) {
+  if (value > 0) return "positive";
+  if (value < 0) return "negative";
+  return "neutral";
+}
+
+function toneClass(tone: string) {
+  if (tone === "positive") return "text-emerald-300";
+  if (tone === "negative") return "text-red-300";
+  return "text-slate-100";
+}
+
+function valueClass(value: number) {
+  return value > 0 ? "text-emerald-300" : value < 0 ? "text-red-300" : "text-slate-400";
 }

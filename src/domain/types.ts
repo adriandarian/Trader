@@ -1,117 +1,68 @@
+export type AssetType = "stock" | "option";
+export type OrderSide = "buy" | "sell";
+export type OrderType = "market" | "limit";
 export type LedgerEntryType =
   | "deposit"
   | "withdrawal"
-  | "stock_buy"
-  | "stock_sell"
-  | "option_premium_debit"
-  | "option_premium_credit"
-  | "fee";
+  | "trade_debit"
+  | "trade_credit"
+  | "dividend"
+  | "option_premium"
+  | "fee"
+  | "adjustment";
 
-export type AssetType = "stock" | "option";
-export type TradeAction = "buy" | "sell";
-export type TradeStatus = "open" | "closed";
-export type OptionType = "call" | "put";
-
-export type LedgerEntry = {
+export type CashLedgerEntry = {
   id: string;
-  date: string;
   type: LedgerEntryType;
   amount: number;
-  source: string;
-  notes?: string;
-  tradeId?: string;
+  effectiveAt: string;
+  sourceLabel: string;
+  note?: string;
+  linkedTradeId?: string;
 };
 
-export type Trade = {
-  id: string;
-  ticker: string;
+export type MarkedPosition = {
+  symbol: string;
   assetType: AssetType;
-  action: TradeAction;
   quantity: number;
-  entryPrice: number;
-  exitPrice?: number;
+  averageEntry: number;
+  currentMark: number;
   openedAt: string;
-  closedAt?: string;
-  thesis: string;
-  strategy: string;
-  riskAmount: number;
-  target: number;
-  stopLoss: number;
-  notes?: string;
-  status: TradeStatus;
-  underlyingTicker?: string;
-  optionType?: OptionType;
-  strike?: number;
   expirationDate?: string;
-  premium?: number;
-  contracts?: number;
-  strategyTag?: string;
-  maxLoss?: number;
-  maxProfit?: number;
-  greeks?: {
-    delta?: number;
-    gamma?: number;
-    theta?: number;
-    vega?: number;
-  };
+  multiplier?: number;
 };
 
-export type AuditEvent = {
-  id: string;
-  date: string;
-  entityType: "trade" | "ledger";
-  entityId: string;
-  action: "created" | "closed" | "ledger_posted";
-  summary: string;
-};
-
-export type Position = {
-  ticker: string;
-  assetType: AssetType;
-  quantity: number;
-  averageCost: number;
-  marketPrice: number;
-  marketValue: number;
-  costBasis: number;
-  unrealizedPnL: number;
-};
-
-export type PerformancePoint = {
-  date: string;
-  cash: number;
-  investedValue: number;
+export type PortfolioSnapshotPoint = {
+  capturedAt: string;
   totalValue: number;
-  totalDeposits: number;
-  tradingReturn: number;
-  accountGrowth: number;
+  externalCashFlow: number;
 };
 
-export type PortfolioSnapshot = {
-  cashBalance: number;
-  totalDeposits: number;
-  totalWithdrawals: number;
-  openPositions: Position[];
-  realizedPnL: number;
-  unrealizedPnL: number;
+export type ProofPortfolioInput = {
+  cashLedgerEntries: CashLedgerEntry[];
+  positions: MarkedPosition[];
+  snapshots: PortfolioSnapshotPoint[];
+  benchmarkReturn?: number;
+  todayPnl?: number;
+  realizedPnl?: number;
+};
+
+export type ProofPortfolioSummary = {
   totalPortfolioValue: number;
+  cashAvailable: number;
+  investedMarketValue: number;
+  todayPnl: number;
+  totalRealizedPnl: number;
+  totalUnrealizedPnl: number;
+  netContributions: number;
   tradingReturnExcludingDeposits: number;
-  accountGrowthIncludingDeposits: number;
-  equityCurve: PerformancePoint[];
-  monthlyPerformance: Array<{
-    month: string;
-    tradingReturn: number;
-    accountGrowth: number;
-  }>;
-  winRate: number;
-  averageWin: number;
-  averageLoss: number;
-  maxDrawdown: number;
-  bestTrade?: Trade;
-  worstTrade?: Trade;
+  timeWeightedReturn: number;
+  benchmarkReturn: number;
 };
 
-export type ProofPortfolioState = {
-  ledger: LedgerEntry[];
-  trades: Trade[];
-  auditLog: AuditEvent[];
+export type QuoteForExecution = {
+  side: OrderSide;
+  bid: number | null;
+  ask: number | null;
+  last?: number | null;
 };
