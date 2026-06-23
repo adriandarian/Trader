@@ -1,5 +1,5 @@
-import { ProofPortfolioApp } from "@/components/proof-portfolio-app";
+import { redirect } from "next/navigation";
 
 export default function Home() {
-  return <ProofPortfolioApp />;
+  redirect("/overview");
 }
