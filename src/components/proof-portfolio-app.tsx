@@ -291,7 +291,7 @@ function TopCommandBar({
           }
           tone={quoteState.clock?.isOpen ? "positive" : "neutral"}
         />
-        <StatusPill label={quoteState.quote?.source.label ?? "Alpaca not connected"} tone="neutral" />
+        <StatusPill label={quoteState.quote?.source.label ?? "Alpaca Basic: IEX real-time"} tone="neutral" />
         <span className="font-mono">
           Last updated {formatTimestamp(quoteState.quote?.source.asOf ?? quoteState.clock?.timestamp ?? null)}
         </span>
@@ -396,8 +396,8 @@ function Overview({
         <div className="rounded-md border border-white/10 bg-[#090d12] p-4">
           <h2 className="text-sm font-medium text-white">Data quality</h2>
           <div className="mt-4 space-y-3 text-xs text-slate-400">
-            <QualityRow label="Stock quotes" value="Alpaca IEX when configured" />
-            <QualityRow label="Options" value="Empty until feed enabled" />
+            <QualityRow label="Stock quotes" value="IEX real-time" />
+            <QualityRow label="Options" value="Indicative options feed" />
             <QualityRow label="Performance" value="Stored snapshots only" />
             <QualityRow label="External flows" value="Cash ledger, not P/L" />
           </div>
@@ -436,7 +436,7 @@ function MarketPanel({
           <p className="text-xs text-slate-500">Real provider responses only</p>
         </div>
         <Badge variant="outline" className="border-slate-700 text-slate-300">
-          {quote?.source.label ?? "No feed"}
+          {quote?.source.label ?? "IEX real-time"}
         </Badge>
       </div>
 

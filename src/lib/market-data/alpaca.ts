@@ -11,9 +11,14 @@ import type {
   SymbolSearchResult,
 } from "./types";
 import { MarketDataError } from "./types";
+import {
+  assertAlpacaReadOnlyEndpoint,
+  getAlpacaOptionFeedLabel,
+  getAlpacaStockFeedLabel,
+} from "./alpaca-boundary";
 
 const dataBaseUrl = "https://data.alpaca.markets";
-const tradingBaseUrl = "https://paper-api.alpaca.markets";
+const metadataBaseUrl = "https://paper-api.alpaca.markets";
 
 type AlpacaQuote = {
   ap?: number;
@@ -55,7 +60,7 @@ export class AlpacaMarketDataProvider implements MarketDataProvider {
     }
 
     const assets = await this.request<Array<{ symbol: string; name: string; exchange?: string; tradable?: boolean }>>(
-      `${tradingBaseUrl}/v2/assets?asset_class=us_equity&status=active`,
+      `${metadataBaseUrl}/v2/assets?asset_class=us_equity&status=active`,
     );
 
     return assets
@@ -145,7 +150,7 @@ export class AlpacaMarketDataProvider implements MarketDataProvider {
         strike_price: string;
         expiration_date: string;
       }>;
-    }>(`${tradingBaseUrl}/v2/options/contracts?${params.toString()}`);
+    }>(`${metadataBaseUrl}/v2/options/contracts?${params.toString()}`);
 
     return (payload.option_contracts ?? []).map((contract) => ({
       symbol: contract.symbol,
@@ -197,7 +202,7 @@ export class AlpacaMarketDataProvider implements MarketDataProvider {
       source: {
         provider: "alpaca",
         feed: this.optionFeed,
-        label: this.optionFeed === "indicative" ? "Indicative options feed" : "OPRA options feed",
+        label: getAlpacaOptionFeedLabel(this.optionFeed),
         asOf: snapshot.latestQuote?.t ?? snapshot.latestTrade?.t ?? null,
         isRealtime: this.optionFeed !== "indicative",
       },
@@ -206,7 +211,7 @@ export class AlpacaMarketDataProvider implements MarketDataProvider {
 
   async getMarketClock(): Promise<MarketClock> {
     const payload = await this.request<{ is_open: boolean; next_open: string; next_close: string }>(
-      `${tradingBaseUrl}/v2/clock`,
+      `${metadataBaseUrl}/v2/clock`,
     );
 
     return {
@@ -218,6 +223,8 @@ export class AlpacaMarketDataProvider implements MarketDataProvider {
   }
 
   private async request<T>(url: string): Promise<T> {
+    assertAlpacaReadOnlyEndpoint(url);
+
     const key = process.env.ALPACA_API_KEY;
     const secret = process.env.ALPACA_API_SECRET;
 
@@ -275,7 +282,7 @@ function mapStockSnapshot(symbol: string, snapshot: AlpacaSnapshot | undefined, 
     source: {
       provider: "alpaca",
       feed,
-      label: feed === "iex" ? "IEX real-time" : `${feed.toUpperCase()} market data`,
+      label: getAlpacaStockFeedLabel(feed),
       asOf: snapshot?.latestQuote?.t ?? snapshot?.latestTrade?.t ?? null,
       isRealtime: true,
     },

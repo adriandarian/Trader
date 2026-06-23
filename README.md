@@ -8,6 +8,7 @@ The app is intentionally strict:
 - No localStorage as source of truth.
 - No fake prices or fabricated charts.
 - Market prices are displayed only from server-side market-data provider responses.
+- Alpaca is read-only market data only. The app never calls Alpaca order, account, funding, transfer, or position endpoints.
 - Deposits and withdrawals are external cash flows, not trading P/L.
 - Closed trade history is designed to be immutable and corrected through adjustment events.
 
@@ -64,7 +65,14 @@ ALPACA_STOCK_FEED="iex"
 ALPACA_OPTION_FEED="indicative"
 ```
 
-The first provider implementation uses Alpaca from server-only route handlers. The UI labels stock quotes with the returned feed label, timestamp, and market clock state. Options contracts and snapshots are supported in the provider layer; if an options feed is unavailable, the provider returns an error instead of substituting fake quotes.
+The first provider implementation uses the free Alpaca Basic tier from server-only route handlers:
+
+- Stock/ETF quotes and bars use `feed=iex` and are labeled `IEX real-time`.
+- Free options snapshots use `feed=indicative` and are labeled `Indicative options feed`.
+- Market clock/status and last-updated timestamps are surfaced wherever quotes are displayed.
+- Symbol discovery, market clock, and option contracts use Alpaca's documented read-only metadata endpoints. A code-level allowlist blocks account, order, funding, transfer, position, watchlist, and portfolio endpoints before any `fetch` is attempted.
+
+Supabase is the only source of truth for simulated cash, paper orders, simulated fills, positions, cost basis, portfolio value, journal entries, audit events, and performance calculations.
 
 ### 4. Vercel environment variables
 
